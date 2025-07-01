@@ -124,7 +124,7 @@ crosswalk_ca <- crosswalk %>%
 
 # Check tract values in crosswalk and CES data
 head(crosswalk_ca$tract)
-head(ces_clean$tract)
+head(ces_clean$tract) #numbers should not have quotations 
 
 # Format tract IDs to have 11 characters
 crosswalk_ca <- crosswalk_ca %>%
@@ -190,6 +190,9 @@ zcta_shapes <- zctas(cb = TRUE, year = 2020) %>%
 zcta_shapes_ca <- zcta_shapes %>%
   filter(ZCTA5CE20 %in% ces_zip_summary$zcta)
 
+print(missing_shapes$zcta)
+
+
 # Convert ZIP codes to character for merging
 ces_zip_summary <- ces_zip_summary %>%
   mutate(zcta = as.character(zcta))
@@ -239,3 +242,175 @@ leaflet(data = ces_map_data) %>%
     title = "PM2.5",
     position = "bottomright"
   )
+
+###############################################################################
+###############################################################################
+# -----------------------------------
+# Define top 10% pollution
+# -----------------------------------
+###############################################################################
+###############################################################################
+
+# -----------------------------------
+# Prepare joined shape data with ACS + CES metrics
+# -----------------------------------
+
+# Ensure zcta columns are characters for merging
+ces_full <- ces_full %>%
+  mutate(zcta = as.character(zcta))
+
+zcta_shapes_ca <- zcta_shapes_ca %>%
+  mutate(zcta = as.character(ZCTA5CE20))
+
+# Join shapefile data with ACS and CES summary data
+income_map_data <- left_join(zcta_shapes_ca, ces_full, by = "zcta")
+
+# -----------------------------------
+# Static map: Median household income
+# -----------------------------------
+ggplot(data = income_map_data) +
+  geom_sf(aes(fill = income), color = NA) +
+  scale_fill_viridis_c(option = "C", na.value = "grey90", name = "Median Income") +
+  labs(
+    title = "Median Household Income by ZIP Code in California",
+    subtitle = "Using ACS 2022 Data",
+    caption = "ZIPs with missing data shown in grey"
+  ) +
+  theme_minimal()
+
+# -----------------------------------
+# Static map: Poverty percentage
+# -----------------------------------
+ggplot(data = income_map_data) +
+  geom_sf(aes(fill = pct_poverty), color = NA) +
+  scale_fill_viridis_c(option = "C", na.value = "grey90", name = "% Poverty") +
+  labs(
+    title = "Poverty Percentage by ZIP Code in California",
+    subtitle = "Using ACS 2022 Data",
+    caption = "ZIPs with missing data shown in grey"
+  ) +
+  theme_minimal()
+
+# -----------------------------------
+# Interactive leaflet map: Income
+# -----------------------------------
+leaflet(data = income_map_data) %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addPolygons(
+    fillColor = ~colorQuantile("YlGnBu", income, n = 5)(income),
+    weight = 0.5,
+    opacity = 1,
+    color = "white",
+    fillOpacity = 0.7,
+    label = ~paste("ZIP:", zcta, "<br>Income: $", round(income, 0)),
+    highlightOptions = highlightOptions(weight = 2, color = "#666", fillOpacity = 0.9, bringToFront = TRUE)
+  ) %>%
+  addLegend(
+    pal = colorQuantile("YlGnBu", income_map_data$income, n = 5),
+    values = ~income,
+    opacity = 0.7,
+    title = "Median Income",
+    position = "bottomright"
+  )
+
+# -----------------------------------
+# Interactive leaflet map: Poverty
+# -----------------------------------
+leaflet(data = income_map_data) %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addPolygons(
+    fillColor = ~colorQuantile("YlOrRd", pct_poverty, n = 5)(pct_poverty),
+    weight = 0.5,
+    opacity = 1,
+    color = "white",
+    fillOpacity = 0.7,
+    label = ~paste("ZIP:", zcta, "<br>Poverty %:", round(pct_poverty, 1)),
+    highlightOptions = highlightOptions(weight = 2, color = "#666", fillOpacity = 0.9, bringToFront = TRUE)
+  ) %>%
+  addLegend(
+    pal = colorQuantile("YlOrRd", income_map_data$pct_poverty, n = 5),
+    values = ~pct_poverty,
+    opacity = 0.7,
+    title = "% Poverty",
+    position = "bottomright"
+  )
+
+# -----------------------------------
+# Define top 50% pollution (median split example)
+# -----------------------------------
+median_pm25 <- median(income_map_data$avg_pm25, na.rm = TRUE)
+income_map_data <- income_map_data %>%
+  mutate(top50_pm25 = avg_pm25 > median_pm25)
+
+# Find the median income value (for reference)
+median_income <- median(income_map_data$income, na.rm = TRUE)
+
+# -----------------------------------
+# GAM model: Poverty ~ smooth(PM2.5)
+# -----------------------------------
+library(mgcv)
+gam_model <- gam(pct_poverty ~ s(avg_pm25), data = income_map_data)
+summary(gam_model)
+
+plot(gam_model, 
+     main = "GAM: Relationship between PM2.5 and Poverty",
+     xlab = "Average PM2.5",
+     ylab = "Poverty (%)",
+     shade = TRUE,
+     col = "blue")
+
+print(paste("Deviance explained by the model:", round(summary(gam_model)$dev.expl * 100, 1), "%"))
+
+# -----------------------------------
+# GAM model: Income ~ smooth(PM2.5)
+# -----------------------------------
+gam_model_income <- gam(income ~ s(avg_pm25), data = income_map_data)
+summary(gam_model_income)
+
+plot(gam_model_income, 
+     main = "GAM: Relationship between PM2.5 and Income",
+     xlab = "Average PM2.5",
+     ylab = "Median Income ($)",
+     shade = TRUE,
+     col = "blue")
+
+print(paste("Deviance explained by the model:", round(summary(gam_model_income)$dev.expl * 100, 1), "%"))
+
+# -----------------------------------
+# Define top 10% pollution
+# -----------------------------------
+quantile_pm25 <- quantile(income_map_data$avg_pm25, 0.90, na.rm = TRUE)
+income_map_data <- income_map_data %>%
+  mutate(top10_pm25 = avg_pm25 > quantile_pm25)
+
+# Define bottom 25% income
+quantile_income <- quantile(income_map_data$income, 0.25, na.rm = TRUE)
+income_map_data <- income_map_data %>%
+  mutate(bottom25_income = income < quantile_income)
+
+# Map: Overlap of top 10% pollution & bottom 25% income
+ggplot(data = income_map_data) +
+  geom_sf(aes(fill = top10_pm25 & bottom25_income), color = NA) +
+  scale_fill_manual(values = c("FALSE" = "grey90", "TRUE" = "red"), name = "Overlap") +
+  labs(
+    title = "ZIP Codes in Top 10% Pollution & Bottom 25% Income",
+    subtitle = "California ZIP Code Tabulation Areas",
+    caption = "Highlighted areas show high pollution and low income"
+  ) +
+  theme_minimal()
+
+# Define top 25% poverty
+quantile_poverty <- quantile(income_map_data$pct_poverty, 0.75, na.rm = TRUE)
+income_map_data <- income_map_data %>%
+  mutate(top25_poverty = pct_poverty > quantile_poverty)
+
+# Map: Overlap of top 10% pollution & top 25% poverty
+ggplot(data = income_map_data) +
+  geom_sf(aes(fill = top10_pm25 & top25_poverty), color = NA) +
+  scale_fill_manual(values = c("FALSE" = "grey90", "TRUE" = "red"), name = "Overlap") +
+  labs(
+    title = "ZIP Codes in Top 10% Pollution & Top 25% Poverty",
+    subtitle = "California ZIP Code Tabulation Areas",
+    caption = "Highlighted areas show high pollution and high poverty"
+  ) +
+  theme_minimal()
