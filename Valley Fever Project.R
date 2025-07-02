@@ -186,7 +186,7 @@ colnames(zcta_shapes)
 
 # Optionally filter for ZIP codes starting with "9" (California)
 zcta_shapes <- zctas(cb = TRUE, year = 2020) %>%
-  filter(startsWith(ZCTA5CE200, "9"))
+  filter(startsWith(ZCTA5CE20, "9"))
 
 # Filter shapes to ZIP codes present in CES data
 zcta_shapes_ca <- zcta_shapes %>%
@@ -415,53 +415,38 @@ ggplot(data = income_map_data) +
 ###############################################################################
 ###############################################################################
 # -----------------------------------
-# Valley Fever Part
-# -----------------------------------
 ###############################################################################
+# --------------------- Valley Fever Part - Clean Rewrite ---------------------
 ###############################################################################
 
 # ---------------------------------------
 # Read and clean Valley Fever data
 # ---------------------------------------
-
-# Read Valley Fever dataset (2022 cases and rates)
 valley_fever <- read_csv("ValleyFever_2022_Cases_Rates_Clean.csv")
 
-# Standardize county names (capitalize each word and remove extra spaces)
 valley_fever <- valley_fever %>%
-  mutate(County = str_to_title(County),
-         County = str_trim(County))
+  mutate(
+    County = str_to_title(County),
+    County = str_trim(County),
+    Rate_per_100k = as.numeric(Rate_per_100k),
+    Cases = as.numeric(Cases)
+  )
 
 # ---------------------------------------
 # Load and prepare county shapefile
 # ---------------------------------------
-
-# Download US county shapefiles and filter for California only
 ca_counties <- counties(cb = TRUE, year = 2020) %>%
   filter(STATEFP == "06") %>%
-  mutate(NAME = str_trim(NAME))  # Clean county name field
+  mutate(NAME = str_trim(NAME))
 
-# Join Valley Fever data to shapefile using county name
 ca_counties <- left_join(ca_counties, valley_fever, by = c("NAME" = "County"))
-
-# Check column names to verify join
-colnames(ca_counties)
-
-# Convert cases and rate columns to numeric (in case they were read as text)
-ca_counties <- ca_counties %>%
-  mutate(
-    Cases = as.numeric(Cases),
-    Rate_per_100k = as.numeric(Rate_per_100k)
-  )
 
 # ---------------------------------------
 # Static ggplot map of Valley Fever cases
 # ---------------------------------------
-
 ggplot(data = ca_counties) +
-  geom_sf(aes(fill = Cases), color = "white") +                  # Fill counties by number of cases
-  geom_sf_text(aes(label = NAME), size = 2, color = "black",    # Add county names as text
-               check_overlap = TRUE) +
+  geom_sf(aes(fill = Cases), color = "white") +
+  geom_sf_text(aes(label = NAME), size = 2, color = "black", check_overlap = TRUE) +
   scale_fill_viridis_c(option = "C", na.value = "grey90", name = "Cases (2022)") +
   labs(
     title = "Valley Fever Cases by County (2022)",
@@ -473,38 +458,21 @@ ggplot(data = ca_counties) +
 # ---------------------------------------
 # Prepare for interactive leaflet map
 # ---------------------------------------
-
-# Transform spatial data to WGS84 (required for leaflet maps)
 ca_counties <- st_transform(ca_counties, crs = 4326)
 
-# Create color palette for interactive map
 pal <- colorNumeric("YlOrRd", domain = ca_counties$Cases, na.color = "transparent")
 
-# ---------------------------------------
-# Interactive leaflet map
-# ---------------------------------------
-
 leaflet(data = ca_counties) %>%
-  addProviderTiles("CartoDB.Positron") %>%  # Add clean base map
+  addProviderTiles("CartoDB.Positron") %>%
   addPolygons(
-    fillColor = ~pal(Cases),                # Fill color by case count
+    fillColor = ~pal(Cases),
     weight = 1,
     opacity = 1,
     color = "white",
     dashArray = "3",
     fillOpacity = 0.7,
-    label = ~paste0(                        # Tooltip content when hovering
-      NAME,
-      "<br>Cases: ", Cases,
-      "<br>Rate per 100k: ", round(Rate_per_100k, 1)
-    ),
-    highlightOptions = highlightOptions(    # Highlight when mouseover
-      weight = 2,
-      color = "#666",
-      dashArray = "",
-      fillOpacity = 0.9,
-      bringToFront = TRUE
-    )
+    label = ~paste0(NAME, "<br>Cases: ", Cases, "<br>Rate per 100k: ", round(Rate_per_100k, 1)),
+    highlightOptions = highlightOptions(weight = 2, color = "#666", dashArray = "", fillOpacity = 0.9, bringToFront = TRUE)
   ) %>%
   addLegend(
     pal = pal,
@@ -515,71 +483,55 @@ leaflet(data = ca_counties) %>%
   )
 
 ###############################################################################
-###############################################################################
+# ------------------ ZIP-level high risk + VF overlap ------------------------
 ###############################################################################
 
+# ---------------------------------------
 # ---------------------------------------
 # Step 1: Flag high-risk ZIP codes
 # ---------------------------------------
-
-# Calculate cutoff for top 10% PM2.5
 pm25_cutoff <- quantile(ces_full$avg_pm25, 0.90, na.rm = TRUE)
-
-# Calculate cutoff for bottom 25% income
 income_cutoff <- quantile(ces_full$income, 0.25, na.rm = TRUE)
 
-# Create flags in ZIP-level data
 ces_full <- ces_full %>%
   mutate(
-    high_pm25 = avg_pm25 >= pm25_cutoff,          # TRUE if in top 10% PM2.5
-    low_income = income <= income_cutoff,         # TRUE if in bottom 25% income
-    high_risk_zip = high_pm25 & low_income       # TRUE if both conditions are met
+    high_pm25 = avg_pm25 >= pm25_cutoff,
+    low_income = income <= income_cutoff,
+    high_risk_zip = high_pm25 & low_income
   )
 
 # ---------------------------------------
 # Step 2: Flag high VF counties
 # ---------------------------------------
+vf_rate_cutoff <- quantile(valley_fever$Rate_per_100k, 0.90, na.rm = TRUE)
 
-# Convert Rate_per_100k column to numeric in Valley Fever data
-valley_fever <- valley_fever %>%
-  mutate(
-    Rate_per_100k = as.numeric(Rate_per_100k)
-  )
-
-# Calculate cutoff for top 5% VF rate
-vf_rate_cutoff <- quantile(valley_fever$Rate_per_100k, 0.9, na.rm = TRUE)
-
-# Create high VF flag in Valley Fever data
 valley_fever <- valley_fever %>%
   mutate(high_vf = Rate_per_100k >= vf_rate_cutoff)
 
 # ---------------------------------------
-# Step 3: Merge county VF flag into ZIP-level data
+# Step 3: Merge county info into ZIP-level data
 # ---------------------------------------
-colnames(ces_full)
-
 zip_county_df <- read_csv("Zip_Code_County_Clean_Final.csv") %>%
   mutate(zip = as.character(zip), county = str_to_title(county))
 
-# Merge county names into ces_full
 ces_full <- ces_full %>%
   left_join(zip_county_df, by = c("zcta" = "zip"))
 
-ces_full <- ces_full %>%
-  left_join(valley_fever %>% select(County, high_vf), by = c("county" = "County")) %>%
-  mutate(overlap_high = high_risk_zip & high_vf)
+colnames(ces_full)
 
+ces_full <- ces_full %>%
+  left_join(valley_fever %>% select(County, high_vf, Rate_per_100k, Cases), 
+            by = c("county" = "County")) %>%
+  mutate(overlap_high = high_risk_zip & high_vf)
 
 # ---------------------------------------
 # Step 4: Join spatial ZIP shape data for mapping
 # ---------------------------------------
-
 ces_map_data <- left_join(zcta_shapes_ca, ces_full, by = c("ZCTA5CE20" = "zcta"))
 
 # ---------------------------------------
 # Step 5: Create overlap map
 # ---------------------------------------
-
 ggplot(data = ces_map_data) +
   geom_sf(aes(fill = overlap_high), color = NA) +
   scale_fill_manual(
@@ -589,7 +541,7 @@ ggplot(data = ces_map_data) +
   ) +
   labs(
     title = "ZIP Codes with High Pollution & Poverty Overlapping High Valley Fever Counties",
-    subtitle = "Top 10% PM2.5, Bottom 25% Income, and Top 5% VF Rate",
+    subtitle = "Top 10% PM2.5, Bottom 25% Income, and Top 10% VF Rate",
     caption = "Data: CalEnviroScreen 4.0, ACS 2022, CDPH 2022"
   ) +
   theme_minimal()
@@ -597,61 +549,37 @@ ggplot(data = ces_map_data) +
 # ---------------------------------------
 # Step 6: Statistical tests on overlap
 # ---------------------------------------
-
-# Contingency table to compare flags
 table(ces_full$high_risk_zip, ces_full$overlap_high)
-
-# Chi-square test of independence
 chisq.test(table(ces_full$high_risk_zip, ces_full$overlap_high))
-
-# Calculate phi coefficient for binary correlation
 phi(table(ces_full$high_risk_zip, ces_full$overlap_high))
 
 # ---------------------------------------
-# Step 7: Proportion plot alternative
+# Step 7: Proportion plot
 # ---------------------------------------
-
 prop_df <- ces_full %>%
-  mutate(
-    VF_Label = ifelse(high_vf, "High VF County", "Not High VF County")
-  ) %>%
+  mutate(VF_Label = ifelse(high_vf, "High VF County", "Not High VF County")) %>%
   group_by(VF_Label) %>%
-  summarize(
-    prop_high_risk = mean(high_risk_zip, na.rm = TRUE),
-    n = n(),
-    .groups = "drop"
-  )
+  summarize(prop_high_risk = mean(high_risk_zip, na.rm = TRUE), n = n(), .groups = "drop")
 
-# Proportion plot code block (assuming you define prop_df earlier)
 ggplot(prop_df, aes(x = VF_Label, y = prop_high_risk)) +
   geom_point(size = 5, color = "red") +
   geom_segment(aes(xend = VF_Label, yend = 0), color = "grey50") +
   scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
-  labs(
-    title = "Proportion of High Risk ZIP Codes by VF County Status",
-    x = "",
-    y = "Proportion of High Risk ZIPs"
-  ) +
+  labs(title = "Proportion of High Risk ZIP Codes by VF County Status", x = "", y = "Proportion of High Risk ZIPs") +
   theme_minimal(base_size = 14)
 
+###############################################################################
+# ------------------- County percentile ranks and final join -----------------
+###############################################################################
 
-# Create a new dataframe with percentile ranks
 vf_percentiles <- ca_counties %>%
-  st_drop_geometry() %>%  # Remove spatial geometry for table calculations
+  st_drop_geometry() %>%
   mutate(
     Rate_per_100k = as.numeric(Rate_per_100k),
     percentile_rank = percent_rank(Rate_per_100k) * 100
   ) %>%
   select(NAME, Cases, Rate_per_100k, percentile_rank) %>%
-  arrange(desc(Rate_per_100k))
-
-# View in console
-print(vf_percentiles)
-
-# Or open in RStudio Viewer
-View(vf_percentiles)
-
-vf_percentiles <- vf_percentiles %>%
+  arrange(desc(Rate_per_100k)) %>%
   mutate(
     percentile_group = case_when(
       percentile_rank >= 90 ~ "Top 10%",
@@ -661,35 +589,29 @@ vf_percentiles <- vf_percentiles %>%
     )
   )
 
-# View updated table with groups
-View(vf_percentiles)
-
-
-# Step 1: Create clean county percentile ranks
 vf_ranked <- ca_counties %>%
   st_drop_geometry() %>%
   mutate(
     Rate_per_100k = as.numeric(Rate_per_100k),
     percentile_rank = percent_rank(Rate_per_100k)
   ) %>%
-  select(NAME, percentile_rank)
+  select(NAME, Rate_per_100k, percentile_rank)
 
-# Step 2: Remove all conflicting columns from valley_fever
-valley_fever <- valley_fever %>%
-  select(County, Year, Cases)  # Keep only needed columns
-
-# Step 3: Clean join — only County and percentile_rank
-valley_fever <- valley_fever %>%
+valley_fever_clean <- valley_fever %>%
+  select(County, Year, Cases, Rate_per_100k) %>%
   left_join(vf_ranked, by = c("County" = "NAME"))
 
-# Step 4: Add top 25% flag
-vf_top25_cutoff <- 0.9
+vf_top25_cutoff <- 0.75  # Change this value as needed
 
-valley_fever <- valley_fever %>%
+valley_fever_clean <- valley_fever_clean %>%
   mutate(top25_vf = percentile_rank >= vf_top25_cutoff)
 
 ces_full <- ces_full %>%
-  left_join(valley_fever %>% select(County, top25_vf), by = c("county" = "County")) %>%
+  select(-starts_with("top25_vf"), -starts_with("Rate_per_100k"), -starts_with("percentile_rank"))
+colnames(valley_fever_clean)
+ces_full <- ces_full %>%
+  left_join(valley_fever_clean %>% select(County, top25_vf, Rate_per_100k.y), 
+            by = c("county" = "County")) %>%
   mutate(overlap_final = high_risk_zip & top25_vf)
 
 ces_map_data <- left_join(zcta_shapes_ca, ces_full, by = c("ZCTA5CE20" = "zcta"))
@@ -708,4 +630,245 @@ ggplot(data = ces_map_data) +
   ) +
   theme_minimal()
 
-#try showing it in otehr colors like red as in top 5 then top 10 then top 25
+
+
+# First, compute percentile ranks for counties
+vf_percentiles <- ca_counties %>%
+  st_drop_geometry() %>%
+  mutate(
+    Rate_per_100k = as.numeric(Rate_per_100k),
+    percentile_rank = percent_rank(Rate_per_100k) * 100,
+    percentile_group = case_when(
+      percentile_rank >= 90 ~ "Top 10%",
+      percentile_rank >= 75 ~ "Top 25%",
+      percentile_rank >= 50 ~ "Top 50%",
+      TRUE ~ "Bottom 50%"
+    )
+  ) %>%
+  select(NAME, Rate_per_100k, percentile_rank, percentile_group)
+
+# View to confirm
+View(vf_percentiles)
+
+
+valley_fever_clean <- valley_fever %>%
+  select(County, Rate_per_100k, Cases) %>%
+  left_join(vf_percentiles, by = c("County" = "NAME"))
+
+ces_full <- ces_full %>%
+  left_join(valley_fever_clean %>% select(County, percentile_group), 
+            by = c("county" = "County"))
+
+ces_map_data <- left_join(zcta_shapes_ca, ces_full, by = c("ZCTA5CE20" = "zcta"))
+
+ggplot(data = ces_map_data) +
+  geom_sf(aes(fill = percentile_group), color = NA) +
+  scale_fill_manual(
+    values = c("Top 10%" = "red", 
+               "Top 25%" = "orange", 
+               "Top 50%" = "yellow", 
+               "Bottom 50%" = "grey80"),
+    name = "VF County Group"
+  ) +
+  labs(
+    title = "ZIP Codes by Valley Fever County Percentile Group",
+    subtitle = "Based on County VF Rate Percentile",
+    caption = "Data: CDPH 2022, CalEnviroScreen 4.0, ACS 2022"
+  ) +
+  theme_minimal()
+
+
+vf_percentiles <- ca_counties %>%
+  st_drop_geometry() %>%
+  mutate(
+    Rate_per_100k = as.numeric(Rate_per_100k),
+    percentile_rank = percent_rank(Rate_per_100k) * 100,
+    percentile_group = case_when(
+      percentile_rank >= 90 ~ "Top 10%",
+      percentile_rank >= 75 ~ "Top 25%",
+      percentile_rank >= 50 ~ "Top 50%",
+      TRUE ~ "Bottom 50%"
+    )
+  ) %>%
+  select(NAME, Rate_per_100k, percentile_rank, percentile_group)
+
+valley_fever_clean <- valley_fever %>%
+  select(County, Rate_per_100k, Cases) %>%
+  left_join(vf_percentiles, by = c("County" = "NAME"))
+
+# Add county column first if needed
+zip_county_df <- read_csv("Zip_Code_County_Clean_Final.csv") %>%
+  mutate(zip = as.character(zip), county = str_to_title(county))
+
+ces_full <- ces_full %>%
+  left_join(zip_county_df, by = c("zcta" = "zip"))
+colnames(ces_full)
+# Merge percentile group
+ces_full <- ces_full %>%
+  left_join(valley_fever_clean %>% select(County, percentile_group), by = c("county.y" = "County"))
+
+pm25_cutoff <- quantile(ces_full$avg_pm25, 0.90, na.rm = TRUE)
+income_cutoff <- quantile(ces_full$income, 0.25, na.rm = TRUE)
+
+ces_full <- ces_full %>%
+  mutate(
+    high_pm25 = avg_pm25 >= pm25_cutoff,
+    low_income = income <= income_cutoff,
+    high_risk_zip = high_pm25 & low_income
+  )
+
+ces_map_data <- left_join(zcta_shapes_ca, ces_full, by = c("ZCTA5CE20" = "zcta"))
+
+colnames(ces_map_data)
+
+ces_map_data <- ces_map_data %>%
+  mutate(plot_group = ifelse(high_risk_zip, percentile_group.y, "Other"))
+
+ggplot(data = ces_map_data) +
+  geom_sf(aes(fill = plot_group), color = NA) +
+  scale_fill_manual(
+    values = c(
+      "Top 10%" = "red",
+      "Top 25%" = "orange",
+      "Top 50%" = "yellow",
+      "Bottom 50%" = "grey60",
+      "Other" = "grey90"
+    ),
+    name = "VF County Group"
+  ) +
+  coord_sf(
+    xlim = c(-124, -114),  # longitude limits (adjust as needed)
+    ylim = c(32, 39.5)       # latitude limits (adjust as needed)
+  ) +
+  labs(
+    title = "ZIP Codes by VF County Percentile Group",
+    subtitle = "Highlighting ZIPs in Top 10% PM2.5 & Bottom 25% Income",
+    caption = "Data: CalEnviroScreen 4.0, ACS 2022, CDPH 2022"
+  ) +
+  theme_minimal()
+
+###############################################################################
+# -------------------------- Valley Fever Data Setup --------------------------
+###############################################################################
+
+# Read Valley Fever dataset
+valley_fever <- read_csv("ValleyFever_2022_Cases_Rates_Clean.csv") %>%
+  mutate(
+    County = str_to_title(County),
+    County = str_trim(County),
+    Rate_per_100k = as.numeric(Rate_per_100k),
+    Cases = as.numeric(Cases)
+  )
+
+# Load county shapefile and join
+ca_counties <- counties(cb = TRUE, year = 2020) %>%
+  filter(STATEFP == "06") %>%
+  mutate(NAME = str_trim(NAME))
+
+ca_counties <- left_join(ca_counties, valley_fever, by = c("NAME" = "County"))
+
+# View map
+ggplot(data = ca_counties) +
+  geom_sf(aes(fill = Cases), color = "white") +
+  geom_sf_text(aes(label = NAME), size = 2, color = "black", check_overlap = TRUE) +
+  scale_fill_viridis_c(option = "C", na.value = "grey90", name = "Cases (2022)") +
+  labs(
+    title = "Valley Fever Cases by County (2022)",
+    subtitle = "California Department of Public Health",
+    caption = "Source: CDPH 2022"
+  ) +
+  theme_minimal()
+
+###############################################################################
+# ---------------------- ZIP-level High Risk Flagging -------------------------
+###############################################################################
+
+# Create cutoff for PM2.5 and poverty
+pm25_cutoff <- quantile(ces_full$avg_pm25, 0.90, na.rm = TRUE)
+poverty_cutoff <- quantile(ces_full$pct_poverty, 0.75, na.rm = TRUE)
+
+ces_full <- ces_full %>%
+  mutate(
+    high_pm25 = avg_pm25 >= pm25_cutoff,
+    high_poverty = pct_poverty >= poverty_cutoff,
+    high_risk_zip = high_pm25 & high_poverty
+  )
+
+###############################################################################
+# ---------------------- VF County Percentile Groups --------------------------
+###############################################################################
+
+# Create percentile ranks and groups for counties
+vf_percentiles <- ca_counties %>%
+  st_drop_geometry() %>%
+  mutate(
+    Rate_per_100k = as.numeric(Rate_per_100k),
+    percentile_rank = percent_rank(Rate_per_100k) * 100,
+    percentile_group = case_when(
+      percentile_rank >= 90 ~ "Top 10%",
+      percentile_rank >= 75 ~ "Top 25%",
+      percentile_rank >= 50 ~ "Top 50%",
+      TRUE ~ "Bottom 50%"
+    )
+  ) %>%
+  select(NAME, Rate_per_100k, percentile_rank, percentile_group)
+
+# Join percentiles to Valley Fever data
+valley_fever_clean <- valley_fever %>%
+  select(County, Rate_per_100k, Cases) %>%
+  left_join(vf_percentiles, by = c("County" = "NAME"))
+
+# Add county column to ZIP-level data if not present
+zip_county_df <- read_csv("Zip_Code_County_Clean_Final.csv") %>%
+  mutate(zip = as.character(zip), county = str_to_title(county))
+
+ces_full <- ces_full %>%
+  left_join(zip_county_df, by = c("zcta" = "zip"))
+
+# Join percentile group to ZIP-level data
+ces_full <- ces_full %>%
+  left_join(valley_fever_clean %>% select(County, percentile_group), 
+            by = c("county.x" = "County"))
+
+###############################################################################
+# ---------------------- Map: Highlighting ZIP Codes --------------------------
+###############################################################################
+
+# Join to shapes
+ces_map_data <- left_join(zcta_shapes_ca, ces_full, by = c("ZCTA5CE20" = "zcta"))
+
+# Create final plot group column
+ces_map_data <- ces_map_data %>%
+  mutate(plot_group = ifelse(high_risk_zip, percentile_group, "Other"))
+
+ggplot(data = ces_map_data) +
+  geom_sf(aes(fill = plot_group), color = NA) +
+  scale_fill_manual(
+    values = c(
+      "Top 10%" = "red",
+      "Top 25%" = "orange",
+      "Top 50%" = "yellow",
+      "Bottom 50%" = "grey60",
+      "Other" = "grey90"
+    ),
+    name = "VF County Group"
+  ) +
+  coord_sf(
+    xlim = c(-124, -114),  # longitude limits (adjust as needed)
+    ylim = c(32, 39.5)       # latitude limits (adjust as needed)
+  ) +
+  labs(
+    title = "ZIP Codes by VF County Percentile Group",
+    subtitle = "Highlighting ZIPs in Top 10% PM2.5 & Top 25% Poverty",
+    caption = "Data: CalEnviroScreen 4.0, ACS 2022, CDPH 2022"
+  ) +
+  theme_minimal()
+
+
+###############################################################################
+# --------------------- Statistical Tests on Overlap --------------------------
+###############################################################################
+
+table(ces_full$high_risk_zip, ces_full$percentile_group)
+
+# You can run more detailed stats as needed (e.g., chi-square, phi coefficient)
