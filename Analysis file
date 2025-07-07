@@ -1,0 +1,503 @@
+# ------------------------------------------------------------
+# Valley-Fever / Climate-Equity • County-Level Analysis (Final)
+# ------------------------------------------------------------
+rm(list = ls())
+
+# 0. Libraries
+library(tidyverse)
+library(tidycensus)
+library(tigris)
+library(sf)
+library(prism)
+library(terra)
+library(exactextractr)
+library(lubridate)
+library(here)
+library(janitor)
+library(stringr)
+library(glmmTMB)
+library(splines)
+here()
+
+options(tigris_use_cache = TRUE, tigris_class = "sf")
+
+# Create directories if they don't exist
+if (!dir.exists(here("data_raw"))) dir.create(here("data_raw"), recursive = TRUE)
+if (!dir.exists(here("data_clean"))) dir.create(here("data_clean"), recursive = TRUE)
+
+
+# 1. DOWNLOAD CLIMATE DATA
+# ------------------------------------------------------------
+prism_set_dl_dir(here("data_raw", "prism"))
+for (year in 2010:2023) {
+  tryCatch({
+    get_prism_monthlys("tmax", years = year, mon = 1:12, keepZip = FALSE)
+    get_prism_monthlys("ppt", years = year, mon = 1:12, keepZip = FALSE)
+  }, error = function(e) {
+    message(paste("Could not download data for year:", year))
+  })
+}
+
+
+# 2. EXTRACT CLIMATE DATA TO TRACTS
+# ------------------------------------------------------------
+pr_tmax_files <- list.files(here("data_raw", "prism"), pattern = "tmax.*\\.bil$", full.names = TRUE, recursive = TRUE)
+pr_ppt_files  <- list.files(here("data_raw", "prism"), pattern = "ppt.*\\.bil$", full.names = TRUE, recursive = TRUE)
+
+if (!length(pr_tmax_files) || !length(pr_ppt_files)) {
+  stop("PRISM rasters missing: cannot proceed")
+}
+
+stack_tmax <- rast(pr_tmax_files)
+stack_ppt  <- rast(pr_ppt_files)
+tract_sf   <- tracts("CA", cb = TRUE, year = 2020)
+
+tmax_vals <- exact_extract(stack_tmax, tract_sf, "mean", progress = FALSE)
+ppt_vals  <- exact_extract(stack_ppt, tract_sf, "mean", progress = FALSE)
+
+munge_climate_data <- function(vals, var_name) {
+  as_tibble(vals) %>%
+    mutate(tract = tract_sf$GEOID) %>%
+    pivot_longer(cols = -tract, names_to = "original_name", values_to = var_name) %>%
+    mutate(month = ymd(paste0(str_extract(original_name, "\\d{6}"), "01"))) %>%
+    select(tract, month, {{var_name}}) %>%
+    filter(!is.na(month))
+}
+
+climate_tract <- left_join(
+  munge_climate_data(tmax_vals, "tmax"),
+  munge_climate_data(ppt_vals, "ppt"),
+  by = c("tract", "month")
+)
+
+
+# 3. PROCESS TRACT-LEVEL SVI & PM2.5 DATA
+# ------------------------------------------------------------
+svi_path <- here("data_raw", "california_svi_2020.csv")
+ces_path <- here("data_raw", "CalEnviroScreen_4.0_Results.csv")
+if (!file.exists(svi_path) || !file.exists(ces_path)) stop("SVI or CES data is missing.")
+
+svi_tract <- read_csv(svi_path) %>%
+  clean_names() %>%
+  filter(rpl_themes >= 0) %>%
+  transmute(
+    tract       = str_pad(as.character(fips), 11, pad = "0"),
+    svi_overall = rpl_themes
+  )
+
+ces_tract <- read_csv(ces_path, show_col_types = FALSE) %>%
+  clean_names() %>%
+  transmute(
+    tract = str_pad(as.character(tract), 11, pad = "0"),
+    pm25  = pm
+  )
+
+
+# Load CES data to get PM2.5 as a proxy for dust
+ces_tract <- read_csv(ces_path, show_col_types = FALSE) %>%
+  clean_names() %>%
+  transmute(
+    tract = str_pad(as.character(tract), 11, pad = "0"),
+    pm25  = pm
+  )
+
+# Join SVI and PM2.5 data together
+svi_pm_tract <- left_join(svi_tract, ces_tract, by = "tract")
+
+# 4. PROCESS COUNTY-LEVEL VALLEY FEVER CASES
+# ------------------------------------------------------------
+vs_path <- here("data_raw", "valley_fever_cases_by_lhd_2001-2023.csv")
+if (!file.exists(vs_path)) stop("County-level case data is missing.") # we need to check this code
+
+vf_cleaned <- read_csv(vs_path, skip = 3, col_names = c("county", "year", "cases_raw", "inc_rate_raw")) %>%
+  mutate(county = str_to_upper(county)) %>%
+  filter(!is.na(county) & !str_detect(county, "TOTAL|BERKELEY|LONG BEACH|PASADENA|\\*")) %>%
+  mutate(county = str_remove(county, " COUNTY"), county = str_trim(county)) %>%
+  mutate(
+    cases = cases_raw,
+    inc_rate = parse_number(inc_rate_raw)
+  ) %>%
+  filter(!is.na(cases) & !is.na(year) & !is.na(inc_rate)) %>%
+  select(county, year, cases, inc_rate)
+
+endemic_counties <- vf_cleaned %>%
+  group_by(county) %>%
+  summarise(
+    total_cases = sum(cases, na.rm = TRUE),
+    mean_inc    = mean(inc_rate, na.rm = TRUE),
+    .groups     = "drop"
+  ) %>%
+  filter(total_cases >= 500, mean_inc > 5) %>%
+  pull(county)
+
+vf_county_cases <- vf_cleaned %>%
+  filter(county %in% endemic_counties) %>%
+  mutate(population = round(cases / (inc_rate / 100000), 0)) %>%
+  select(county, year, cases, population)
+
+
+# 5. BUILD COUNTY-LEVEL PANEL & RUN ANALYSIS (need to go through this)
+# ------------------------------------------------------------
+county_data <- counties("CA", cb = TRUE, year = 2020) %>%
+  as_tibble() %>%
+  mutate(county = str_to_upper(NAME)) %>%
+  select(COUNTYFP, county)
+
+tract_to_county_lookup <- tracts("CA", cb = TRUE, year = 2020) %>%
+  as_tibble() %>%
+  left_join(county_data, by = "COUNTYFP") %>%
+  select(tract = GEOID, county)
+
+tract_populations <- get_acs("tract", variables = "B01003_001", state = "CA", year = 2020) %>%
+  select(tract = GEOID, pop_tract = estimate)
+
+# Aggregate SVI AND PM2.5 to county level
+svi_pm_county <- svi_pm_tract %>%
+  left_join(tract_to_county_lookup, by = "tract") %>%
+  left_join(tract_populations, by = "tract") %>%
+  filter(!is.na(county) & !is.na(pop_tract)) %>%
+  group_by(county) %>%
+  summarise(
+    svi_overall = weighted.mean(svi_overall, w = pop_tract, na.rm = TRUE),
+    pm25        = weighted.mean(pm25, w = pop_tract, na.rm = TRUE)
+  )
+
+climate_county <- climate_tract %>%
+  left_join(tract_to_county_lookup, by = "tract") %>%
+  filter(!is.na(county)) %>%
+  group_by(county, month) %>%
+  summarise(across(c(tmax, ppt), ~ mean(.x, na.rm = TRUE)), .groups = "drop")
+
+vf_cases_monthly <- vf_county_cases %>%
+  filter(year >= 2010 & year <= 2023) %>%
+  uncount(12, .id = "month_num") %>%
+  mutate(
+    cases_monthly = round(cases / 12, 0),
+    month = ymd(paste(year, month_num, "01", sep = "-"))
+  ) %>%
+  select(county, month, cases = cases_monthly, population)
+
+# Join everything, including the new pm25 data
+county_month_panel <- vf_cases_monthly %>%
+  left_join(svi_pm_county, by = "county") %>%
+  left_join(climate_county, by = c("county", "month")) %>%
+  drop_na()
+
+# --- Statistical Model (Publication Version) ---
+model_data <- county_month_panel %>%
+  mutate(
+    time = as.numeric(month - min(month)) / 30.25,
+    month_factor = factor(month(month)),
+    county = factor(county)
+  )
+
+# Final model including PM2.5 as a control for dust
+final_model_pub <- glmmTMB(
+  cases ~ svi_overall + pm25 + tmax + ppt + # Added pm25 here
+    ns(time, df = 4) +
+    month_factor +
+    factor(county) +
+    offset(log(population)),
+  family = nbinom2,
+  data = model_data
+)
+?glmmTMB
+print("--- Final Model Results ---")
+print(summary(final_model_pub))
+
+
+# --- Final Result Interpretation ---
+print("--- SVI Incidence Rate Ratio (IRR) with 95% CI ---")
+
+model_ci <- confint(final_model_pub, parm = "beta_", method = "wald")
+model_coeffs <- summary(final_model_pub)$coefficients$cond
+
+svi_log_irr <- model_coeffs["svi_overall", "Estimate"]
+svi_ci_log <- model_ci["svi_overall", ]
+
+irr_0.1_svi <- exp(svi_log_irr * 0.1)
+ci_0.1_svi <- exp(svi_ci_log * 0.1)
+
+cat(sprintf(
+  "IRR for a 0.1 unit increase in SVI: %.3f (95%% CI: %.3f, %.3f)\n",
+  irr_0.1_svi,
+  ci_0.1_svi[1],
+  ci_0.1_svi[2]
+))
+
+# -------------------------------------------------------------------
+# ADD-ON: Re-run the model WITHOUT the dust confounder for comparison
+# -------------------------------------------------------------------
+print("--- Running Model WITHOUT Dust Control (for comparison) ---")
+
+# Define the model formula without the pm25 term
+model_without_dust <- glmmTMB(
+  cases ~ svi_overall + tmax + ppt + # The pm25 term is removed here
+    ns(time, df = 4) +
+    month_factor +
+    factor(county) +
+    offset(log(population)),
+  family = nbinom2,
+  data = model_data
+)
+
+print(summary(model_without_dust))
+
+# --- Interpretation for the model without dust control ---
+print("--- SVI IRR (95% CI) WITHOUT Dust Control ---")
+
+model_ci_no_dust <- confint(model_without_dust, parm = "beta_", method = "wald")
+model_coeffs_no_dust <- summary(model_without_dust)$coefficients$cond
+
+svi_log_irr_no_dust <- model_coeffs_no_dust["svi_overall", "Estimate"]
+svi_ci_log_no_dust <- model_ci_no_dust["svi_overall", ]
+
+irr_0.1_svi_no_dust <- exp(svi_log_irr_no_dust * 0.1)
+ci_0.1_svi_no_dust <- exp(svi_ci_log_no_dust * 0.1)
+
+cat(sprintf(
+  "IRR for a 0.1 unit increase in SVI (no dust control): %.3f (95%% CI: %.3f, %.3f)\n",
+  irr_0.1_svi_no_dust,
+  ci_0.1_svi_no_dust[1],
+  ci_0.1_svi_no_dust[2]
+))
+
+# -------------------------------------------------------------------
+# SENSITIVITY TEST: EXCLUDING URBAN TRACTS
+# -------------------------------------------------------------------
+print("--- Running Sensitivity Test: Excluding Urban Tracts ---")
+
+# 1. Identify non-urban tracts based on the paper's criteria
+#    (We will keep tracts BELOW the 40th percentile of population density)
+
+# Get tract populations and areas to calculate density
+tract_areas <- tracts("CA", cb = TRUE, year = 2020) %>%
+  as_tibble() %>%
+  select(tract = GEOID, area_sq_m = ALAND)
+
+pop_density <- left_join(tract_populations, tract_areas, by = "tract") %>%
+  mutate(density = pop_tract / (area_sq_m / 1e6)) %>%
+  filter(!is.na(density) & is.finite(density))
+
+# Find the density threshold (40th percentile)
+urban_threshold <- quantile(pop_density$density, 0.40, na.rm = TRUE)
+
+# Create a list of tracts TO KEEP (the non-urban ones)
+non_urban_tracts <- pop_density %>%
+  filter(density <= urban_threshold) %>%
+  pull(tract)
+
+# 2. Re-aggregate the data using ONLY non-urban tracts
+svi_pm_county_no_urban <- svi_pm_tract %>%
+  filter(tract %in% non_urban_tracts) %>% # Apply the filter here
+  left_join(tract_to_county_lookup, by = "tract") %>%
+  left_join(tract_populations, by = "tract") %>%
+  filter(!is.na(county) & !is.na(pop_tract)) %>%
+  group_by(county) %>%
+  summarise(
+    svi_overall = weighted.mean(svi_overall, w = pop_tract, na.rm = TRUE),
+    pm25        = weighted.mean(pm25, w = pop_tract, na.rm = TRUE)
+  )
+
+climate_county_no_urban <- climate_tract %>%
+  filter(tract %in% non_urban_tracts) %>% # Apply the filter here
+  left_join(tract_to_county_lookup, by = "tract") %>%
+  filter(!is.na(county)) %>%
+  group_by(county, month) %>%
+  summarise(across(c(tmax, ppt), ~ mean(.x, na.rm = TRUE)), .groups = "drop")
+
+# 3. Re-build the panel with the filtered data
+county_month_panel_no_urban <- vf_cases_monthly %>%
+  left_join(svi_pm_county_no_urban, by = "county") %>%
+  left_join(climate_county_no_urban, by = c("county", "month")) %>%
+  drop_na()
+
+# 4. Re-run the model on the non-urban dataset
+model_data_no_urban <- county_month_panel_no_urban %>%
+  mutate(
+    time = as.numeric(month - min(month)) / 30.25,
+    month_factor = factor(month(month)),
+    county = factor(county)
+  )
+
+final_model_sens_urban <- glmmTMB(
+  cases ~ svi_overall + pm25 + tmax + ppt +
+    ns(time, df = 4) +
+    month_factor +
+    factor(county) +
+    offset(log(population)),
+  family = nbinom2,
+  data = model_data_no_urban
+)
+
+print("--- Sensitivity Model Results (Excluding Urban Tracts) ---")
+print(summary(final_model_sens_urban))
+
+
+install.packages("DHARMa")
+# -------------------------------------------------------------------
+# MODEL DIAGNOSTICS WITH DHARMa
+# -------------------------------------------------------------------
+print("--- Running DHARMa Model Diagnostics ---")
+
+# You may need to install the package first if you haven't already
+# install.packages("DHARMa")
+library(DHARMa)
+library(splines)
+
+# Simulate residuals from your final model with the dust control
+# The n=250 is the number of simulations, which is usually sufficient
+simulation_output <- simulateResiduals(fittedModel = final_model_pub, n = 250)
+
+# Create the standard diagnostic plots
+# This will open a new plot window in RStudio
+plot(simulation_output)
+
+testDispersion(simulation_output)  
+
+zi  <- testZeroInflation(simulation_output)
+print(zi)   
+
+# -------------------------------------------------------------------
+# MODEL COMPARISON: ZINB and NB1
+# -------------------------------------------------------------------
+
+library(glmmTMB)
+print("--- Running Additional Models for Comparison ---")
+
+# 1. Zero-Inflated Negative Binomial (nbinom2) Model
+# This adds the zero-inflation component back to your main model.
+print("--- Fitting Zero-Inflated NB2 Model (ZINB) ---")
+model_zinb <- glmmTMB(
+  cases ~ svi_overall + pm25 + tmax + ppt +
+    ns(time, df = 4) +
+    month_factor +
+    factor(county) +
+    offset(log(population)),
+  ziformula = ~1, # This adds the zero-inflation part
+  family = nbinom2,
+  data = model_data
+)
+print(summary(model_zinb))
+
+
+# 2. Standard Negative Binomial 1 (nbinom1) Model
+# This uses a different parameterization for overdispersion (variance = phi * mu)
+print("--- Fitting NB1 Model ---")
+model_nb1 <- glmmTMB(
+  cases ~ svi_overall + pm25 + tmax + ppt +
+    ns(time, df = 4) +
+    month_factor +
+    factor(county) +
+    offset(log(population)),
+  family = nbinom1, # Change the family here
+  data = model_data
+)
+print(summary(model_nb1))
+
+
+# 3. Compare Models using AIC
+# The model with the lowest AIC is generally preferred.
+print("--- Model Comparison (AIC) ---")
+# Renaming your main model for clarity in the table
+final_model_nb2 <- final_model_fe
+print(AIC(final_model_nb2, model_zinb, model_nb1))
+
+
+#--- CHECKING FOR SPATIAL AUTOCORRELATION ---
+# --- CHECKING FOR SPATIAL AUTOCORRELATION (Corrected for Repeated Measures) ---
+print("--- Running Spatial Autocorrelation Test ---")
+
+library(DHARMa)
+?DHARMa
+# 1. Simulate residuals from your final model (this step is the same)
+# Note: Ensure 'final_model_fe' is your fitted model object
+simulation_output <- simulateResiduals(fittedModel = final_model_fe, n = 250)
+
+# 2. Aggregate the residuals by county
+# This calculates the average residual for each unique location (county)
+aggregated_residuals <- recalculateResiduals(
+  simulationOutput = simulation_output,
+  group = model_data$county
+)
+
+# 3. Get the unique coordinates for each county
+# This data frame will match the aggregated_residuals object
+unique_county_coords <- model_data %>%
+  distinct(county) %>%
+  left_join(
+    counties("CA", cb = TRUE, year = 2020) %>%
+      mutate(county = str_to_upper(NAME)) %>%
+      st_centroid() %>%
+      mutate(lon = st_coordinates(.)[,1], lat = st_coordinates(.)[,2]) %>%
+      as_tibble() %>%
+      select(county, lon, lat),
+    by = "county"
+  )
+
+# 4. Run the spatial test on the aggregated residuals and unique coordinates
+spatial_test_result <- testSpatialAutocorrelation(
+  simulationOutput = aggregated_residuals,
+  x = unique_county_coords$lon,
+  y = unique_county_coords$lat,
+  plot = TRUE
+)
+
+print("--- Moran's I Test for Spatial Autocorrelation ---")
+print(spatial_test_result)
+
+
+# --- STRATIFIED ANALYSIS: TESTING THE UNDER-REPORTING HYPOTHESIS ---
+print("--- Running Stratified Analysis by Socioeconomic Vulnerability ---")
+
+# We will use one of the SVI sub-themes as a proxy for healthcare access barriers.
+# Let's use the Socioeconomic theme (RPL_THEME1) from the original SVI file.
+svi_themes <- read_csv(here("data_raw", "california_svi_2020.csv")) %>%
+  clean_names() %>%
+  filter(rpl_theme1 >= 0) %>%
+  select(
+    tract = fips,
+    svi_socioeconomic = rpl_theme1
+  )
+
+# Aggregate this theme to the county level
+svi_socioeconomic_county <- svi_themes %>%
+  mutate(tract = str_pad(as.character(tract), 11, pad = "0")) %>%
+  left_join(tract_to_county_lookup, by = "tract") %>%
+  left_join(tract_populations, by = "tract") %>%
+  filter(!is.na(county) & !is.na(pop_tract)) %>%
+  group_by(county) %>%
+  summarise(svi_socioeconomic = weighted.mean(svi_socioeconomic, w = pop_tract, na.rm = TRUE))
+
+# Find the median to split counties into two groups
+median_svi_socio <- median(svi_socioeconomic_county$svi_socioeconomic)
+
+low_vulnerability_counties <- svi_socioeconomic_county %>%
+  filter(svi_socioeconomic <= median_svi_socio) %>%
+  pull(county)
+
+high_vulnerability_counties <- svi_socioeconomic_county %>%
+  filter(svi_socioeconomic > median_svi_socio) %>%
+  pull(county)
+
+# Run the model for the HIGH vulnerability group
+model_high_vuln <- glmmTMB(
+  cases ~ svi_overall + pm25 + tmax + ppt + ns(time, df = 4) + month_factor + offset(log(population)),
+  family = nbinom2,
+  data = model_data %>% filter(county %in% high_vulnerability_counties)
+)
+
+# Run the model for the LOW vulnerability group
+model_low_vuln <- glmmTMB(
+  cases ~ svi_overall + pm25 + tmax + ppt + ns(time, df = 4) + month_factor + offset(log(population)),
+  family = nbinom2,
+  data = model_data %>% filter(county %in% low_vulnerability_counties)
+)
+
+print("--- Model Results for HIGH Socioeconomic Vulnerability Counties ---")
+print(summary(model_high_vuln))
+
+print("--- Model Results for LOW Socioeconomic Vulnerability Counties ---")
+print(summary(model_low_vuln))
+
+citation("DHARMa") 
