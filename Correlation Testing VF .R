@@ -437,6 +437,7 @@ if (length(successful_combos) == 0) {
 
 
 
+
 #########################################
 # Load libraries
 #########################################
@@ -456,7 +457,6 @@ svi_summary <- svi_all %>%
   summarise(
     pov = mean(ep_pov150, na.rm = TRUE),
     disabl = mean(ep_disabl, na.rm = TRUE),
-    limeng = mean(ep_limeng, na.rm = TRUE),
     crowd = mean(ep_crowd, na.rm = TRUE),
     .groups = "drop"
   )
@@ -494,7 +494,7 @@ vf_svi <- left_join(vf_clean, svi_summary, by = "county") %>%
 #########################################
 # --- Build and summarize multi-variable regression model ---
 #########################################
-final_formula <- "total_cases ~ pov + disabl + limeng + crowd"
+final_formula <- "total_cases ~ pov + disabl + crowd"
 model_final <- lm(as.formula(final_formula), data = vf_svi)
 
 # Print model summary: shows coefficient estimates, significance, R², etc.
@@ -602,4 +602,285 @@ if (nrow(merged_data) > 0) {
 # - We calculate and print VIFs to check multicollinearity.
 # - Separately, we analyze PM2.5 vs. Valley Fever: run correlation test, plot relationship, run simple regression.
 # - All plots are wrapped in print() to show automatically in scripts and when running in one go.
+
+
+
+
+
+
+
+
+
+
+#########################################
+# Load libraries
+#########################################
+library(tidyverse)
+library(janitor)
+library(leaps)
+library(car)
+
+#########################################
+# --- Read and clean SVI data (16 variables) ---
+#########################################
+svi_all <- read_csv("data_raw/california_svi_2020.csv") %>%
+  clean_names()
+
+# Summarize 16 SVI variables by county
+svi_summary <- svi_all %>%
+  group_by(county = str_to_upper(county)) %>%
+  summarise(
+    ep_pov150 = mean(ep_pov150, na.rm = TRUE),
+    ep_unemp = mean(ep_unemp, na.rm = TRUE),
+    ep_hburd = mean(ep_hburd, na.rm = TRUE),
+    ep_nohsdp = mean(ep_nohsdp, na.rm = TRUE),
+    ep_uninsur = mean(ep_uninsur, na.rm = TRUE),
+    ep_age65 = mean(ep_age65, na.rm = TRUE),
+    ep_age17 = mean(ep_age17, na.rm = TRUE),
+    ep_disabl = mean(ep_disabl, na.rm = TRUE),
+    ep_sngpnt = mean(ep_sngpnt, na.rm = TRUE),
+    ep_limeng = mean(ep_limeng, na.rm = TRUE),
+    ep_minrty = mean(ep_minrty, na.rm = TRUE),
+    ep_munit = mean(ep_munit, na.rm = TRUE),
+    ep_mobile = mean(ep_mobile, na.rm = TRUE),
+    ep_crowd = mean(ep_crowd, na.rm = TRUE),
+    ep_noveh = mean(ep_noveh, na.rm = TRUE),
+    ep_groupq = mean(ep_groupq, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#########################################
+# --- Read and clean PM2.5 data ---
+#########################################
+pm_raw <- read_csv("HDPulse_data_export.csv", col_names = "X1")
+
+# Remove first 5 rows (headers, CA, US rows)
+pm_trim <- pm_raw[-c(1:6), , drop = FALSE]
+
+# Separate columns
+pm_clean <- pm_trim %>%
+  separate(X1, into = c("county", "fips", "pm25"), sep = ",") %>%
+  mutate(
+    county = str_remove(county, " County"),
+    county = str_to_upper(county),
+    county = str_trim(county),
+    pm25 = as.numeric(pm25)
+  ) %>%
+  filter(!is.na(pm25)) %>%
+  dplyr::select(county, pm25)   # ✅ Use dplyr::select explicitly here
+
+
+#########################################
+# --- Merge SVI and PM2.5 data ---
+#########################################
+svi_pm <- left_join(svi_summary, pm_clean, by = "county") %>%
+  drop_na()
+
+#########################################
+# --- Read and clean Valley Fever data ---
+#########################################
+vf_cases <- read_csv("valley_fever_cases_by_lhd_2001-2023.csv", skip = 3,
+                     col_names = c("county", "year", "cases_raw", "inc_rate_raw"))
+
+vf_clean <- vf_cases %>%
+  mutate(
+    county = str_to_upper(county),
+    county = str_remove(county, " COUNTY"),
+    county = str_trim(county),
+    cases = as.numeric(cases_raw),
+    county = case_when(
+      county == "BERKELEY" ~ "ALAMEDA",
+      county == "LONG BEACH" ~ "LOS ANGELES",
+      county == "PASADENA" ~ "LOS ANGELES",
+      TRUE ~ county
+    )
+  ) %>%
+  filter(!is.na(cases) & !str_detect(county, "TOTAL|\\*")) %>%
+  group_by(county) %>%
+  summarise(total_cases = sum(cases, na.rm = TRUE), .groups = "drop")
+
+#########################################
+# --- Merge everything together ---
+#########################################
+vf_full <- left_join(vf_clean, svi_pm, by = "county") %>%
+  drop_na()
+
+#########################################
+# --- Run best subset regression (all 17 variables) ---
+#########################################
+predictor_vars <- names(vf_full)[!(names(vf_full) %in% c("county", "total_cases"))]
+formula_text <- paste("total_cases ~", paste(predictor_vars, collapse = " + "))
+
+best_subset <- regsubsets(as.formula(formula_text), data = vf_full, nvmax = length(predictor_vars), really.big = TRUE)
+summary_best <- summary(best_subset)
+
+#########################################
+# --- Check combinations with VIF < 5 ---
+#########################################
+selected_matrix <- summary_best$outmat
+successful_combos <- list()
+
+for (size in 1:length(predictor_vars)) {
+  combo_rows <- rownames(selected_matrix)[apply(selected_matrix, 1, function(x) sum(x == "*")) == size]
+  
+  for (row in combo_rows) {
+    vars_in_combo <- names(which(selected_matrix[row, ] == "*"))
+    formula_combo <- paste("total_cases ~", paste(vars_in_combo, collapse = " + "))
+    model_combo <- lm(as.formula(formula_combo), data = vf_full)
+    
+    if (length(vars_in_combo) == 1) {
+      adj_r2 <- summary(model_combo)$adj.r.squared
+      successful_combos[[length(successful_combos) + 1]] <- list(
+        vars = vars_in_combo,
+        adj_r2 = adj_r2,
+        vif = NA
+      )
+    } else {
+      vifs <- vif(model_combo)
+      if (all(vifs < 5)) {
+        adj_r2 <- summary(model_combo)$adj.r.squared
+        successful_combos[[length(successful_combos) + 1]] <- list(
+          vars = vars_in_combo,
+          adj_r2 = adj_r2,
+          vif = vifs
+        )
+      }
+    }
+  }
+}
+
+#########################################
+# --- Print successful combinations ---
+#########################################
+if (length(successful_combos) == 0) {
+  cat("No combinations found with all VIF < 5.\n")
+} else {
+  for (i in seq_along(successful_combos)) {
+    cat("\n--- Successful combination", i, "---\n")
+    print(successful_combos[[i]]$vars)
+    cat("Adjusted R²:", round(successful_combos[[i]]$adj_r2, 3), "\n")
+    print(successful_combos[[i]]$vif)
+  }
+}
+
+
+
+
+
+#########################################
+# Load libraries
+#########################################
+library(tidyverse)
+library(janitor)
+library(car)
+
+#########################################
+# --- Read and clean SVI data (16 vars) ---
+#########################################
+svi_all <- read_csv("data_raw/california_svi_2020.csv") %>%
+  clean_names()
+
+# Keep only selected 3 SVI variables
+svi_summary <- svi_all %>%
+  group_by(county = str_to_upper(county)) %>%
+  summarise(
+    ep_pov150 = mean(ep_pov150, na.rm = TRUE),
+    ep_disabl = mean(ep_disabl, na.rm = TRUE),
+    ep_crowd = mean(ep_crowd, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#########################################
+# --- Read and clean PM2.5 data ---
+#########################################
+pm_raw <- read_csv("HDPulse_data_export.csv", col_names = "X1")
+pm_trim <- pm_raw[-c(1:6), , drop = FALSE]
+
+pm_clean <- pm_trim %>%
+  separate(X1, into = c("county", "fips", "pm25"), sep = ",") %>%
+  mutate(
+    county = str_remove(county, " County"),
+    county = str_to_upper(county),
+    county = str_trim(county),
+    pm25 = as.numeric(pm25)
+  ) %>%
+  filter(!is.na(pm25)) %>%
+  dplyr::select(county, pm25)
+
+#########################################
+# --- Merge SVI and PM2.5 data ---
+#########################################
+svi_pm <- left_join(svi_summary, pm_clean, by = "county") %>%
+  drop_na()
+
+#########################################
+# --- Read and clean Valley Fever data ---
+#########################################
+vf_cases <- read_csv("valley_fever_cases_by_lhd_2001-2023.csv", skip = 3,
+                     col_names = c("county", "year", "cases_raw", "inc_rate_raw"))
+
+vf_clean <- vf_cases %>%
+  mutate(
+    county = str_to_upper(county),
+    county = str_remove(county, " COUNTY"),
+    county = str_trim(county),
+    cases = as.numeric(cases_raw),
+    county = case_when(
+      county == "BERKELEY" ~ "ALAMEDA",
+      county == "LONG BEACH" ~ "LOS ANGELES",
+      county == "PASADENA" ~ "LOS ANGELES",
+      TRUE ~ county
+    )
+  ) %>%
+  filter(!is.na(cases) & !str_detect(county, "TOTAL|\\*")) %>%
+  group_by(county) %>%
+  summarise(total_cases = sum(cases, na.rm = TRUE), .groups = "drop") %>%
+  filter(total_cases > 44)  # Only counties with more than 44 cases
+
+#########################################
+# --- Merge all data together ---
+#########################################
+vf_final <- left_join(vf_clean, svi_pm, by = "county") %>%
+  drop_na()
+
+#########################################
+# --- Build regression model using 5 vars ---
+#########################################
+final_formula <- "total_cases ~ ep_pov150 + ep_disabl + ep_crowd + pm25"
+model_final <- lm(as.formula(final_formula), data = vf_final)
+
+# Print summary
+summary(model_final)
+
+# Check VIFs
+vif_values <- vif(model_final)
+cat("VIF for each variable:\n")
+print(vif_values)
+
+#########################################
+# --- Plot predicted vs actual cases ---
+#########################################
+vf_final <- vf_final %>%
+  mutate(predicted_cases = predict(model_final, newdata = vf_final))
+
+# Correlation between predicted and actual
+cor_test <- cor.test(vf_final$predicted_cases, vf_final$total_cases)
+r_value <- round(cor_test$estimate, 3)
+p_value <- signif(cor_test$p.value, 3)
+
+annotation_text <- sprintf("r = %.3f\np = %.3f", r_value, p_value)
+
+ggplot(vf_final, aes(x = predicted_cases, y = total_cases)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+  annotate("text",
+           x = min(vf_final$predicted_cases, na.rm = TRUE) + 0.02,
+           y = max(vf_final$total_cases, na.rm = TRUE) * 0.9,
+           label = annotation_text, hjust = 0, size = 4, color = "black") +
+  labs(
+    title = "Predicted vs. Actual Valley Fever Cases",
+    x = "Predicted Cases",
+    y = "Observed Cases (2001–2023)"
+  ) +
+  theme_minimal()
 
