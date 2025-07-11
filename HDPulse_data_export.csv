@@ -1,0 +1,75 @@
+﻿Air Pollution - Particulate Matter for California by County
+"All Races (includes Hispanic/Latino), Both Sexes, All Ages, 2020"
+
+Sorted by Percent
+
+County,FIPS,Micrograms per cubic meter (PM2.5)(1)
+"California",06000,12.6
+"United States",00000,7.3
+"Mono County",06051,39.1
+"Mariposa County",06043,21.3
+"Kern County",06029,21.1
+"Plumas County",06063,21.1
+"Tulare County",06107,20.8
+"San Diego County",06073,20.6
+"Fresno County",06019,20.3
+"Kings County",06031,20.0
+"San Bernardino County",06071,17.4
+"Madera County",06039,17.1
+"Glenn County",06021,17.0
+"Sutter County",06101,16.7
+"Yuba County",06115,16.3
+"Tuolumne County",06109,16.2
+"Butte County",06007,16.1
+"Yolo County",06113,15.9
+"Los Angeles County",06037,15.6
+"Stanislaus County",06099,15.6
+"Merced County",06047,15.3
+"San Joaquin County",06077,15.1
+"Sacramento County",06067,14.9
+"Riverside County",06065,14.8
+"El Dorado County",06017,14.6
+"Amador County",06005,14.2
+"Tehama County",06103,13.3
+"Placer County",06061,13.1
+"Colusa County",06011,12.8
+"Calaveras County",06009,12.7
+"Orange County",06059,12.7
+"Santa Clara County",06085,12.5
+"Lassen County",06035,12.4
+"Mendocino County",06045,12.4
+"Nevada County",06057,12.4
+"Solano County",06095,12.4
+"Inyo County",06027,12.2
+"Imperial County",06025,11.9
+"Alameda County",06001,11.8
+"Contra Costa County",06013,11.1
+"Santa Cruz County",06087,11.1
+"Siskiyou County",06093,10.9
+"Sierra County",06091,10.8
+"San Francisco County",06075,10.5
+"Modoc County",06049,10.4
+"Del Norte County",06015,10.3
+"Napa County",06055,10.3
+"Trinity County",06105,10.2
+"San Luis Obispo County",06079,10.0
+"San Mateo County",06081,9.8
+"Shasta County",06089,9.8
+"Alpine County",06003,9.7
+"Lake County",06033,9.6
+"Santa Barbara County",06083,9.3
+"San Benito County",06069,8.9
+"Humboldt County",06023,8.8
+"Monterey County",06053,8.8
+"Marin County",06041,8.6
+"Sonoma County",06097,8.3
+"Ventura County",06111,7.9
+
+Suggested Citation:
+HDPulse: An Ecosystem of Minority Health and Health Disparities Resources. National Institute on Minority Health and Health Disparities. Created 7/10/2025. Available from https://hdpulse.nimhd.nih.gov
+
+Notes:
+Source: National Environmental Public Health Tracking Network [ https://ephtracking.cdc.gov/DataExplorer/ ] from the CDC.
+Average daily density of fine particulate matter in micrograms per cubic meter (PM2.5).
+
+NA: Some data are not available or suppressed due to insufficient counts.
