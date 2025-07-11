@@ -506,6 +506,38 @@ cat("VIF for each variable:\n")
 print(vif_values)
 
 #########################################
+# --- Add predicted values and plot ---
+#########################################
+
+# Add predicted cases to the dataset
+vf_svi <- vf_svi %>%
+  mutate(predicted_cases = predict(model_final, newdata = vf_svi))
+
+# Calculate correlation between predicted and actual cases
+cor_test <- cor.test(vf_svi$predicted_cases, vf_svi$total_cases)
+r_value <- round(cor_test$estimate, 3)
+p_value <- signif(cor_test$p.value, 3)
+
+# Create annotation text for the plot
+annotation_text <- sprintf("r = %.3f\np = %.3f", r_value, p_value)
+
+# Plot predicted vs actual total cases
+ggplot(vf_svi, aes(x = predicted_cases, y = total_cases)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+  annotate("text",
+           x = min(vf_svi$predicted_cases, na.rm = TRUE) + 0.02,
+           y = max(vf_svi$total_cases, na.rm = TRUE) * 0.9,
+           label = annotation_text, hjust = 0, size = 4, color = "black") +
+  labs(
+    title = "Predicted vs. Actual Total Valley Fever Cases",
+    x = "Predicted Total Cases (Fitted Values)",
+    y = "Observed Total Cases (2001–2023)"
+  ) +
+  theme_minimal()
+
+
+#########################################
 # --- PM2.5 analysis ---
 #########################################
 
