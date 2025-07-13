@@ -437,7 +437,6 @@ if (length(successful_combos) == 0) {
 
 
 
-
 #########################################
 # Load libraries
 #########################################
@@ -464,6 +463,9 @@ svi_summary <- svi_all %>%
 #########################################
 # --- Read and clean Valley Fever data ---
 #########################################
+#########################################
+# --- Read and clean Valley Fever data ---
+#########################################
 vf_cases <- read_csv("valley_fever_cases_by_lhd_2001-2023.csv", skip = 3,
                      col_names = c("county", "year", "cases_raw", "inc_rate_raw"))
 
@@ -483,7 +485,7 @@ vf_clean <- vf_cases %>%
   filter(!is.na(cases) & !str_detect(county, "TOTAL|\\*")) %>%
   group_by(county) %>%
   summarise(total_cases = sum(cases, na.rm = TRUE), .groups = "drop") %>%
-  filter(total_cases > 44)  # Keep only counties with more than 44 cases
+  filter(total_cases > 44)  # ✅ Keep only counties with more than 44 cases
 
 #########################################
 # --- Merge VF data and SVI data ---
@@ -497,10 +499,10 @@ vf_svi <- left_join(vf_clean, svi_summary, by = "county") %>%
 final_formula <- "total_cases ~ pov + disabl + crowd"
 model_final <- lm(as.formula(final_formula), data = vf_svi)
 
-# Print model summary: shows coefficient estimates, significance, R², etc.
+# Print summary: coefficients, significance, R², etc.
 summary(model_final)
 
-# Check VIFs to confirm no strong multicollinearity
+# Check VIFs
 vif_values <- vif(model_final)
 cat("VIF for each variable:\n")
 print(vif_values)
@@ -508,20 +510,22 @@ print(vif_values)
 #########################################
 # --- Add predicted values and plot ---
 #########################################
-
-# Add predicted cases to the dataset
 vf_svi <- vf_svi %>%
   mutate(predicted_cases = predict(model_final, newdata = vf_svi))
 
-# Calculate correlation between predicted and actual cases
+# Calculate correlation between predicted and actual
 cor_test <- cor.test(vf_svi$predicted_cases, vf_svi$total_cases)
 r_value <- round(cor_test$estimate, 3)
 p_value <- signif(cor_test$p.value, 3)
 
-# Create annotation text for the plot
+# Explicitly print correlation score
+cat("Correlation between predicted and actual cases (r):", r_value, "\n")
+cat("p-value:", p_value, "\n")
+
+# Create annotation text
 annotation_text <- sprintf("r = %.3f\np = %.3f", r_value, p_value)
 
-# Plot predicted vs actual total cases
+# Plot predicted vs actual
 ggplot(vf_svi, aes(x = predicted_cases, y = total_cases)) +
   geom_point(size = 3, alpha = 0.7) +
   geom_smooth(method = "lm", se = TRUE, color = "blue") +
@@ -535,6 +539,20 @@ ggplot(vf_svi, aes(x = predicted_cases, y = total_cases)) +
     y = "Observed Total Cases (2001–2023)"
   ) +
   theme_minimal()
+
+#########################################
+# --- Residual diagnostic plots ---
+#########################################
+par(mfrow = c(2, 2))  # Diagnostic panel
+plot(model_final)
+par(mfrow = c(1, 1))  # Reset
+
+#########################################
+# --- Null model and AIC comparison ---
+#########################################
+model_null <- lm(total_cases ~ 1, data = vf_svi)
+aic_values <- AIC(model_final, model_null)
+print(aic_values)
 
 
 #########################################
@@ -767,6 +785,148 @@ if (length(successful_combos) == 0) {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+library(MASS)  # For glm.nb()
+
+# Negative binomial model: total_cases ~ rpl_themes, with offset for log population
+model_nb <- glm.nb(total_cases ~ rpl_themes + offset(log(e_totpop)), data = vf_svi)
+
+# Print summary
+summary(model_nb)
+
+# AIC
+cat("AIC:", AIC(model_nb), "\n")
+
+# Optionally, Pearson residuals diagnostic plot
+res <- residuals(model_nb, type = "pearson")
+plot(fitted(model_nb), res,
+     xlab = "Fitted values",
+     ylab = "Pearson residuals",
+     main = "Residual plot (Negative Binomial)")
+abline(h = 0, col = "red")
+
+
+
+
+
+
+
+library(MASS)  # For negative binomial
+library(tidyverse)
+library(janitor)
+
+#########################################
+# --- Read and clean SVI data ---
+#########################################
+svi_all <- read_csv("data_raw/california_svi_2020.csv") %>%
+  clean_names()
+
+# Summarize SVI variables by county
+svi_summary <- svi_all %>%
+  group_by(county = str_to_upper(county)) %>%
+  summarise(
+    pov = mean(ep_pov150, na.rm = TRUE),
+    disabl = mean(ep_disabl, na.rm = TRUE),
+    crowd = mean(ep_crowd, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#########################################
+# --- Read and clean Valley Fever data ---
+#########################################
+vf_cases <- read_csv("valley_fever_cases_by_lhd_2001-2023.csv", skip = 3,
+                     col_names = c("county", "year", "cases_raw", "inc_rate_raw"))
+
+vf_clean <- vf_cases %>%
+  mutate(
+    county = str_to_upper(county),
+    county = str_remove(county, " COUNTY"),
+    county = str_trim(county),
+    cases = as.numeric(cases_raw),
+    county = case_when(
+      county == "BERKELEY" ~ "ALAMEDA",
+      county == "LONG BEACH" ~ "LOS ANGELES",
+      county == "PASADENA" ~ "LOS ANGELES",
+      TRUE ~ county
+    )
+  ) %>%
+  filter(!is.na(cases) & !str_detect(county, "TOTAL|\\*")) %>%
+  group_by(county) %>%
+  summarise(total_cases = sum(cases, na.rm = TRUE), .groups = "drop") %>%
+  filter(total_cases > 44)
+
+#########################################
+# --- Merge VF data and SVI summary ---
+#########################################
+vf_svi <- left_join(vf_clean, svi_summary, by = "county") %>%
+  filter(!is.na(pov) & !is.na(disabl) & !is.na(crowd))  # ✅ Fix: explicitly drop rows with missing predictors
+
+#########################################
+# --- Negative binomial model ---
+#########################################
+model_nb_multi <- glm.nb(total_cases ~ pov + disabl + crowd, data = vf_svi)
+
+# Summary
+summary(model_nb_multi)
+
+# Null model for AIC comparison
+model_null_nb <- glm.nb(total_cases ~ 1, data = vf_svi)
+aic_values <- AIC(model_nb_multi, model_null_nb)
+print(aic_values)
+
+#########################################
+# --- Residual diagnostics ---
+#########################################
+res_nb <- residuals(model_nb_multi, type = "pearson")
+plot(fitted(model_nb_multi), res_nb,
+     xlab = "Fitted values",
+     ylab = "Pearson residuals",
+     main = "Residual plot (Negative Binomial)")
+abline(h = 0, col = "red")
+
+#########################################
+# --- Predicted vs actual plot ---
+#########################################
+vf_svi <- vf_svi %>%
+  mutate(predicted_cases_nb = predict(model_nb_multi, type = "response"))
+
+# Correlation
+cor_test <- cor.test(vf_svi$predicted_cases_nb, vf_svi$total_cases)
+r_value <- round(cor_test$estimate, 3)
+p_value <- signif(cor_test$p.value, 3)
+
+annotation_text <- sprintf("r = %.3f\np = %.3f", r_value, p_value)
+
+ggplot(vf_svi, aes(x = predicted_cases_nb, y = total_cases)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_abline(slope = 1, intercept = 0, color = "blue", linetype = "dashed") +
+  annotate("text",
+           x = min(vf_svi$predicted_cases_nb, na.rm = TRUE),
+           y = max(vf_svi$total_cases, na.rm = TRUE) * 0.9,
+           label = annotation_text, hjust = 0, size = 4, color = "black") +
+  labs(
+    title = "Predicted vs. Actual Total Valley Fever Cases (Negative Binomial)",
+    x = "Predicted Total Cases",
+    y = "Observed Total Cases (2001–2023)"
+  ) +
+  theme_minimal()
+
+
+
+
+
+
 #########################################
 # Load libraries
 #########################################
@@ -775,12 +935,11 @@ library(janitor)
 library(car)
 
 #########################################
-# --- Read and clean SVI data (16 vars) ---
+# --- Read and clean SVI data (3 vars) ---
 #########################################
 svi_all <- read_csv("data_raw/california_svi_2020.csv") %>%
   clean_names()
 
-# Keep only selected 3 SVI variables
 svi_summary <- svi_all %>%
   group_by(county = str_to_upper(county)) %>%
   summarise(
@@ -835,7 +994,7 @@ vf_clean <- vf_cases %>%
   filter(!is.na(cases) & !str_detect(county, "TOTAL|\\*")) %>%
   group_by(county) %>%
   summarise(total_cases = sum(cases, na.rm = TRUE), .groups = "drop") %>%
-  filter(total_cases > 44)  # Only counties with more than 44 cases
+  filter(total_cases > 44)
 
 #########################################
 # --- Merge all data together ---
@@ -844,7 +1003,7 @@ vf_final <- left_join(vf_clean, svi_pm, by = "county") %>%
   drop_na()
 
 #########################################
-# --- Build regression model using 5 vars ---
+# --- Build regression model (5 vars) ---
 #########################################
 final_formula <- "total_cases ~ ep_pov150 + ep_disabl + ep_crowd + pm25"
 model_final <- lm(as.formula(final_formula), data = vf_final)
@@ -858,18 +1017,38 @@ cat("VIF for each variable:\n")
 print(vif_values)
 
 #########################################
-# --- Plot predicted vs actual cases ---
+# --- Residual diagnostic plots ---
+#########################################
+par(mfrow = c(2, 2))
+plot(model_final)
+par(mfrow = c(1, 1))
+
+#########################################
+# --- Null model and AIC comparison ---
+#########################################
+model_null <- lm(total_cases ~ 1, data = vf_final)
+aic_values <- AIC(model_final, model_null)
+print(aic_values)
+
+#########################################
+# --- Predicted vs actual correlation ---
 #########################################
 vf_final <- vf_final %>%
   mutate(predicted_cases = predict(model_final, newdata = vf_final))
 
-# Correlation between predicted and actual
 cor_test <- cor.test(vf_final$predicted_cases, vf_final$total_cases)
 r_value <- round(cor_test$estimate, 3)
 p_value <- signif(cor_test$p.value, 3)
 
+# Print correlation explicitly
+cat("Correlation (predicted vs. actual):", r_value, "\n")
+cat("Correlation p-value:", p_value, "\n")
+
 annotation_text <- sprintf("r = %.3f\np = %.3f", r_value, p_value)
 
+#########################################
+# --- Plot predicted vs actual ---
+#########################################
 ggplot(vf_final, aes(x = predicted_cases, y = total_cases)) +
   geom_point(size = 3, alpha = 0.7) +
   geom_smooth(method = "lm", se = TRUE, color = "blue") +
@@ -879,8 +1058,355 @@ ggplot(vf_final, aes(x = predicted_cases, y = total_cases)) +
            label = annotation_text, hjust = 0, size = 4, color = "black") +
   labs(
     title = "Predicted vs. Actual Valley Fever Cases",
-    x = "Predicted Cases",
+    x = "Predicted Cases (Fitted)",
     y = "Observed Cases (2001–2023)"
   ) +
   theme_minimal()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#########################################
+# Load libraries
+#########################################
+library(tidyverse)
+library(janitor)
+library(mgcv)
+
+#########################################
+# --- Read and clean SVI data ---
+#########################################
+svi_all <- read_csv("data_raw/california_svi_2020.csv") %>%
+  clean_names()
+
+svi_summary <- svi_all %>%
+  group_by(county = str_to_upper(county)) %>%
+  summarise(
+    rpl_themes = mean(rpl_themes, na.rm = TRUE),
+    e_totpop = mean(e_totpop, na.rm = TRUE),  # ✅ Add total population column
+    .groups = "drop"
+  )
+
+#########################################
+# --- Read and clean Valley Fever data ---
+#########################################
+vf_cases <- read_csv("valley_fever_cases_by_lhd_2001-2023.csv", skip = 3,
+                     col_names = c("county", "year", "cases_raw", "inc_rate_raw"))
+
+vf_clean <- vf_cases %>%
+  mutate(
+    county = str_to_upper(county),
+    county = str_remove(county, " COUNTY"),
+    county = str_trim(county),
+    cases = as.numeric(cases_raw),
+    county = case_when(
+      county == "BERKELEY" ~ "ALAMEDA",
+      county == "LONG BEACH" ~ "LOS ANGELES",
+      county == "PASADENA" ~ "LOS ANGELES",
+      TRUE ~ county
+    )
+  ) %>%
+  filter(!is.na(cases) & !str_detect(county, "TOTAL|\\*")) %>%
+  group_by(county) %>%
+  summarise(total_cases = sum(cases, na.rm = TRUE), .groups = "drop") %>%
+  filter(total_cases > 44)
+
+#########################################
+# --- Merge VF data and SVI summary ---
+#########################################
+vf_svi <- left_join(vf_clean, svi_summary, by = "county") %>%
+  filter(!is.na(rpl_themes) & !is.na(e_totpop))
+
+#########################################
+# --- GAM model with offset ---
+#########################################
+model_gam <- gam(total_cases ~ s(rpl_themes) + offset(log(e_totpop)), family = nb(), data = vf_svi)
+
+# Summary
+summary(model_gam)
+
+#########################################
+# --- Residual plot ---
+#########################################
+res <- residuals(model_gam, type = "pearson")
+plot(fitted(model_gam), res,
+     xlab = "Fitted values",
+     ylab = "Pearson residuals",
+     main = "Residual plot (GAM with Offset)")
+abline(h = 0, col = "red")
+
+#########################################
+# --- Predicted vs actual plot ---
+#########################################
+vf_svi <- vf_svi %>%
+  mutate(predicted_cases_gam = predict(model_gam, type = "response"))
+
+cor_test <- cor.test(vf_svi$predicted_cases_gam, vf_svi$total_cases)
+r_value <- round(cor_test$estimate, 3)
+p_value <- signif(cor_test$p.value, 3)
+annotation_text <- sprintf("r = %.3f\np = %.3f", r_value, p_value)
+
+ggplot(vf_svi, aes(x = predicted_cases_gam, y = total_cases)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_abline(slope = 1, intercept = 0, color = "blue", linetype = "dashed") +
+  annotate("text",
+           x = min(vf_svi$predicted_cases_gam, na.rm = TRUE),
+           y = max(vf_svi$total_cases, na.rm = TRUE) * 0.9,
+           label = annotation_text, hjust = 0, size = 4, color = "black") +
+  labs(
+    title = "Predicted vs. Actual Total Cases (GAM with Offset)",
+    x = "Predicted Total Cases",
+    y = "Observed Total Cases (2001–2023)"
+  ) +
+  theme_minimal()
+
+#########################################
+# --- Smooth function plot ---
+#########################################
+plot(model_gam, pages = 1, shade = TRUE)
+
+
+
+
+
+
+
+#########################################
+# Load libraries
+#########################################
+library(tidyverse)
+library(janitor)
+library(mgcv)
+
+#########################################
+# --- Read and clean SVI data ---
+#########################################
+svi_all <- read_csv("data_raw/california_svi_2020.csv") %>%
+  clean_names()
+
+svi_summary <- svi_all %>%
+  group_by(county = str_to_upper(county)) %>%
+  summarise(
+    pov = mean(ep_pov150, na.rm = TRUE),
+    disabl = mean(ep_disabl, na.rm = TRUE),
+    crowd = mean(ep_crowd, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#########################################
+# --- Read and clean Valley Fever data ---
+#########################################
+vf_cases <- read_csv("valley_fever_cases_by_lhd_2001-2023.csv", skip = 3,
+                     col_names = c("county", "year", "cases_raw", "inc_rate_raw"))
+
+vf_clean <- vf_cases %>%
+  mutate(
+    county = str_to_upper(county),
+    county = str_remove(county, " COUNTY"),
+    county = str_trim(county),
+    cases = as.numeric(cases_raw),
+    county = case_when(
+      county == "BERKELEY" ~ "ALAMEDA",
+      county == "LONG BEACH" ~ "LOS ANGELES",
+      county == "PASADENA" ~ "LOS ANGELES",
+      TRUE ~ county
+    )
+  ) %>%
+  filter(!is.na(cases) & !str_detect(county, "TOTAL|\\*")) %>%
+  group_by(county) %>%
+  summarise(total_cases = sum(cases, na.rm = TRUE), .groups = "drop") %>%
+  filter(total_cases > 44)
+
+#########################################
+# --- Merge data ---
+#########################################
+vf_svi <- left_join(vf_clean, svi_summary, by = "county") %>%
+  filter(!is.na(pov) & !is.na(disabl) & !is.na(crowd))
+
+#########################################
+# --- GAM model ---
+#########################################
+model_gam_multi <- gam(total_cases ~ s(pov) + s(disabl) + s(crowd), family = nb(), data = vf_svi)
+
+# Summary
+summary(model_gam_multi)
+
+#########################################
+# --- Residual plot ---
+#########################################
+res_nb <- residuals(model_gam_multi, type = "pearson")
+plot(fitted(model_gam_multi), res_nb,
+     xlab = "Fitted values",
+     ylab = "Pearson residuals",
+     main = "Residual plot (GAM SVI 3 vars)")
+abline(h = 0, col = "red")
+
+#########################################
+# --- Predicted vs actual plot ---
+#########################################
+vf_svi <- vf_svi %>%
+  mutate(predicted_cases_gam = predict(model_gam_multi, type = "response"))
+
+cor_test <- cor.test(vf_svi$predicted_cases_gam, vf_svi$total_cases)
+r_value <- round(cor_test$estimate, 3)
+p_value <- signif(cor_test$p.value, 3)
+annotation_text <- sprintf("r = %.3f\np = %.3f", r_value, p_value)
+
+ggplot(vf_svi, aes(x = predicted_cases_gam, y = total_cases)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_abline(slope = 1, intercept = 0, color = "blue", linetype = "dashed") +
+  annotate("text",
+           x = min(vf_svi$predicted_cases_gam, na.rm = TRUE),
+           y = max(vf_svi$total_cases, na.rm = TRUE) * 0.9,
+           label = annotation_text, hjust = 0, size = 4, color = "black") +
+  labs(
+    title = "Predicted vs. Actual Total Cases (GAM SVI 3 vars)",
+    x = "Predicted Total Cases",
+    y = "Observed Total Cases (2001–2023)"
+  ) +
+  theme_minimal()
+
+#########################################
+# --- Smooth function plots ---
+#########################################
+plot(model_gam_multi, pages = 1, shade = TRUE)
+
+
+
+
+
+
+#########################################
+# Load libraries
+#########################################
+library(tidyverse)
+library(janitor)
+library(mgcv)
+
+#########################################
+# --- Read and clean SVI data ---
+#########################################
+svi_all <- read_csv("data_raw/california_svi_2020.csv") %>%
+  clean_names()
+
+svi_summary <- svi_all %>%
+  group_by(county = str_to_upper(county)) %>%
+  summarise(
+    ep_pov150 = mean(ep_pov150, na.rm = TRUE),
+    ep_disabl = mean(ep_disabl, na.rm = TRUE),
+    ep_crowd = mean(ep_crowd, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#########################################
+# --- Read and clean PM2.5 data ---
+#########################################
+pm_raw <- read_csv("HDPulse_data_export.csv", col_names = "X1")
+pm_trim <- pm_raw[-c(1:6), , drop = FALSE]
+
+pm_clean <- pm_trim %>%
+  separate(X1, into = c("county", "fips", "pm25"), sep = ",") %>%
+  mutate(
+    county = str_remove(county, " County"),
+    county = str_to_upper(county),
+    county = str_trim(county),
+    pm25 = as.numeric(pm25)
+  ) %>%
+  filter(!is.na(pm25)) %>%
+  dplyr::select(county, pm25)
+
+#########################################
+# --- Merge SVI and PM2.5 data ---
+#########################################
+svi_pm <- left_join(svi_summary, pm_clean, by = "county") %>%
+  drop_na()
+
+#########################################
+# --- Read and clean Valley Fever data ---
+#########################################
+vf_cases <- read_csv("valley_fever_cases_by_lhd_2001-2023.csv", skip = 3,
+                     col_names = c("county", "year", "cases_raw", "inc_rate_raw"))
+
+vf_clean <- vf_cases %>%
+  mutate(
+    county = str_to_upper(county),
+    county = str_remove(county, " COUNTY"),
+    county = str_trim(county),
+    cases = as.numeric(cases_raw),
+    county = case_when(
+      county == "BERKELEY" ~ "ALAMEDA",
+      county == "LONG BEACH" ~ "LOS ANGELES",
+      county == "PASADENA" ~ "LOS ANGELES",
+      TRUE ~ county
+    )
+  ) %>%
+  filter(!is.na(cases) & !str_detect(county, "TOTAL|\\*")) %>%
+  group_by(county) %>%
+  summarise(total_cases = sum(cases, na.rm = TRUE), .groups = "drop") %>%
+  filter(total_cases > 44)
+
+#########################################
+# --- Merge final data ---
+#########################################
+vf_final <- left_join(vf_clean, svi_pm, by = "county") %>%
+  drop_na()
+
+#########################################
+# --- GAM model ---
+#########################################
+model_gam_final <- gam(total_cases ~ s(ep_pov150) + s(ep_disabl) + s(ep_crowd) + s(pm25), family = nb(), data = vf_final)
+
+# Summary
+summary(model_gam_final)
+
+#########################################
+# --- Residual plot ---
+#########################################
+res_nb <- residuals(model_gam_final, type = "pearson")
+plot(fitted(model_gam_final), res_nb,
+     xlab = "Fitted values",
+     ylab = "Pearson residuals",
+     main = "Residual plot (GAM SVI + PM2.5)")
+abline(h = 0, col = "red")
+
+#########################################
+# --- Predicted vs actual plot ---
+#########################################
+vf_final <- vf_final %>%
+  mutate(predicted_cases_gam = predict(model_gam_final, type = "response"))
+
+cor_test <- cor.test(vf_final$predicted_cases_gam, vf_final$total_cases)
+r_value <- round(cor_test$estimate, 3)
+p_value <- signif(cor_test$p.value, 3)
+annotation_text <- sprintf("r = %.3f\np = %.3f", r_value, p_value)
+
+ggplot(vf_final, aes(x = predicted_cases_gam, y = total_cases)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_abline(slope = 1, intercept = 0, color = "blue", linetype = "dashed") +
+  annotate("text",
+           x = min(vf_final$predicted_cases_gam, na.rm = TRUE),
+           y = max(vf_final$total_cases, na.rm = TRUE) * 0.9,
+           label = annotation_text, hjust = 0, size = 4, color = "black") +
+  labs(
+    title = "Predicted vs. Actual Total Cases (GAM SVI + PM2.5)",
+    x = "Predicted Total Cases",
+    y = "Observed Total Cases (2001–2023)"
+  ) +
+  theme_minimal()
+
+#########################################
+# --- Smooth function plots ---
+#########################################
+plot(model_gam_final, pages = 1, shade = TRUE)
 
