@@ -1,3 +1,4 @@
+rm(list = ls())
 #########################################
 # Setup: load necessary libraries
 #########################################
@@ -494,6 +495,11 @@ vf_clean <- vf_cases %>%
   group_by(county) %>%
   summarise(total_cases = sum(cases, na.rm = TRUE), .groups = "drop") %>%
   filter(total_cases > 44)  # ✅ Keep only counties with more than 44 cases
+
+#########################################
+# --- Count and list counties above 44 cases ---
+#########################################
+
 
 #########################################
 # --- Merge VF data and SVI data ---
@@ -1242,3 +1248,940 @@ plot(model_gam_final, pages = 1, shade = TRUE)
 #########################################
 model_aic <- AIC(model_gam_final)
 cat("AIC for GAM with SVI + PM2.5 variables:", model_aic, "\n")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Folder path where your files are stored
+folder_path <- "Temp"
+
+# Read each CSV individually and assign to separate objects
+data_2001 <- read_csv(file.path(folder_path, "2001.csv"))
+data_2002 <- read_csv(file.path(folder_path, "2002.csv"))
+data_2003 <- read_csv(file.path(folder_path, "2003.csv"))
+data_2004 <- read_csv(file.path(folder_path, "2004.csv"))
+data_2005 <- read_csv(file.path(folder_path, "2005.csv"))
+data_2006 <- read_csv(file.path(folder_path, "2006.csv"))
+data_2007 <- read_csv(file.path(folder_path, "2007.csv"))
+data_2008 <- read_csv(file.path(folder_path, "2008.csv"))
+data_2009 <- read_csv(file.path(folder_path, "2009.csv"))
+data_2010 <- read_csv(file.path(folder_path, "2010.csv"))
+data_2011 <- read_csv(file.path(folder_path, "2011.csv"))
+data_2012 <- read_csv(file.path(folder_path, "2012.csv"))
+data_2013 <- read_csv(file.path(folder_path, "2013.csv"))
+data_2014 <- read_csv(file.path(folder_path, "2014.csv"))
+data_2015 <- read_csv(file.path(folder_path, "2015.csv"))
+data_2016 <- read_csv(file.path(folder_path, "2016.csv"))
+data_2017 <- read_csv(file.path(folder_path, "2017.csv"))
+data_2018 <- read_csv(file.path(folder_path, "2018.csv"))
+data_2019 <- read_csv(file.path(folder_path, "2019.csv"))
+data_2020 <- read_csv(file.path(folder_path, "2020.csv"))
+data_2021 <- read_csv(file.path(folder_path, "2021.csv"))
+data_2022 <- read_csv(file.path(folder_path, "2022.csv"))
+data_2023 <- read_csv(file.path(folder_path, "2023.csv"))
+
+
+
+library(tidyverse)
+
+years <- 2001:2023
+
+all_data <- list()
+
+for (yr in years) {
+  file_path <- paste0("Temp/", yr, ".csv")
+  temp_raw <- read_csv(file_path, skip = 4)
+  
+  temp_clean <- temp_raw %>%
+    dplyr::select(Name, Value) %>%
+    mutate(year = yr)
+  
+  all_data[[as.character(yr)]] <- temp_clean
+}
+
+# Combine into one data frame
+combined_data <- bind_rows(all_data)
+
+# Check
+print(head(combined_data))
+
+# Convert Value to numeric if needed (sometimes read as character)
+combined_data <- combined_data %>%
+  mutate(Value = as.numeric(Value))
+
+# Calculate average value per county
+county_avg <- combined_data %>%
+  group_by(Name) %>%
+  summarise(
+    total_value = sum(Value, na.rm = TRUE),
+    avg_value = total_value / 22
+  ) %>%
+  arrange(desc(avg_value))  # Optional: sort by average
+
+# View results
+print(county_avg)
+
+
+
+
+
+
+
+vf_cases <- read_csv("valley_fever_cases_by_lhd_2001-2023.csv", skip = 3,
+                     col_names = c("county", "year", "cases_raw", "inc_rate_raw"))
+
+vf_clean <- vf_cases %>%
+  mutate(
+    county = str_to_upper(county),
+    county = str_remove(county, " COUNTY"),
+    county = str_trim(county),
+    cases = as.numeric(cases_raw),
+    county = case_when(
+      county == "BERKELEY" ~ "ALAMEDA",
+      county == "LONG BEACH" ~ "LOS ANGELES",
+      county == "PASADENA" ~ "LOS ANGELES",
+      TRUE ~ county
+    )
+  ) %>%
+  filter(!is.na(cases) & !str_detect(county, "TOTAL|\\*")) %>%
+  group_by(county) %>%
+  summarise(total_cases = sum(cases, na.rm = TRUE), .groups = "drop") %>%
+  filter(total_cases > 44)
+
+
+
+# Assuming your temperature averages are in `county_avg`
+# Clean county names to match
+county_avg <- county_avg %>%
+  mutate(Name = str_to_upper(Name),
+         Name = str_remove(Name, " COUNTY"),
+         Name = str_trim(Name))
+
+# Merge only counties with >44 VF cases
+merged_vf_temp <- vf_clean %>%
+  left_join(county_avg, by = c("county" = "Name"))
+
+# Drop counties with no temperature data (if any)
+merged_vf_temp <- merged_vf_temp %>%
+  drop_na(avg_value)
+
+# View final dataset
+print(merged_vf_temp)
+
+# Calculate Pearson correlation
+cor_test <- cor.test(merged_vf_temp$total_cases, merged_vf_temp$avg_value)
+
+# Print results
+cat("Pearson correlation coefficient (r):", round(cor_test$estimate, 3), "\n")
+cat("p-value:", signif(cor_test$p.value, 3), "\n")
+
+library(ggplot2)
+
+r_value <- round(cor_test$estimate, 3)
+p_value <- signif(cor_test$p.value, 3)
+annotation_text <- sprintf("r = %.3f\np = %.3f", r_value, p_value)
+
+ggplot(merged_vf_temp, aes(x = avg_value, y = total_cases)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+  annotate("text",
+           x = min(merged_vf_temp$avg_value, na.rm = TRUE) + 0.2,
+           y = max(merged_vf_temp$total_cases, na.rm = TRUE) * 0.9,
+           label = annotation_text, hjust = 0, size = 4, color = "black") +
+  labs(
+    title = "Total Valley Fever Cases vs. Average Temperature (2001–2023)",
+    x = "Average Temperature (°F)",
+    y = "Total VF Cases (2001–2023)"
+  ) +
+  theme_minimal()
+
+
+
+
+
+
+
+
+#########################################
+# --- Read and clean Valley Fever data ---
+#########################################
+vf_cases <- readr::read_csv("valley_fever_cases_by_lhd_2001-2023.csv", skip = 3,
+                            col_names = c("county", "year", "cases_raw", "inc_rate_raw"))
+
+vf_clean <- vf_cases %>%
+  mutate(
+    county = str_to_upper(county),
+    county = str_remove(county, " COUNTY"),
+    county = str_trim(county),
+    cases = as.numeric(cases_raw),
+    county = case_when(
+      county == "BERKELEY" ~ "ALAMEDA",
+      county == "LONG BEACH" ~ "LOS ANGELES",
+      county == "PASADENA" ~ "LOS ANGELES",
+      TRUE ~ county
+    )
+  ) %>%
+  filter(!is.na(cases) & !str_detect(county, "TOTAL|\\*")) %>%
+  group_by(county) %>%
+  summarise(total_cases = sum(cases, na.rm = TRUE), .groups = "drop") %>%
+  filter(total_cases > 44)  # Only keep counties with >44 cases
+
+#########################################
+# --- Merge SVI + PM data ---
+#########################################
+vf_final <- left_join(vf_clean, svi_pm, by = "county") %>%
+  drop_na()
+
+#########################################
+# --- Merge with temperature data ---
+#########################################
+vf_final <- left_join(
+  vf_final,
+  merged_vf_temp %>% as_tibble() %>% dplyr::select(county, avg_value),
+  by = "county"
+) %>%
+  rename(avg_temp = avg_value) %>%
+  drop_na()
+
+#########################################
+# --- Build regression model using 5 vars ---
+#########################################
+final_formula <- "total_cases ~ ep_pov150 + ep_disabl + ep_crowd + pm25 + avg_temp"
+model_final <- lm(as.formula(final_formula), data = vf_final)
+
+# Print summary
+summary(model_final)
+
+#########################################
+# --- Check VIFs for multicollinearity ---
+#########################################
+vif_values <- car::vif(model_final)
+cat("VIF for each variable:\n")
+print(vif_values)
+
+#########################################
+# --- Add predicted values ---
+#########################################
+vf_final <- vf_final %>%
+  mutate(predicted_cases = predict(model_final, newdata = vf_final))
+
+#########################################
+# --- Correlation test ---
+#########################################
+cor_test <- cor.test(vf_final$predicted_cases, vf_final$total_cases)
+r_value <- round(cor_test$estimate, 3)
+p_value <- signif(cor_test$p.value, 3)
+
+cat("Correlation between predicted and actual cases (r):", r_value, "\n")
+cat("p-value:", p_value, "\n")
+
+annotation_text <- sprintf("r = %.3f\np = %.3f", r_value, p_value)
+
+#########################################
+# --- Plot predicted vs actual cases ---
+#########################################
+ggplot(vf_final, aes(x = predicted_cases, y = total_cases)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+  annotate("text",
+           x = min(vf_final$predicted_cases, na.rm = TRUE) + 0.02,
+           y = max(vf_final$total_cases, na.rm = TRUE) * 0.9,
+           label = annotation_text, hjust = 0, size = 4, color = "black") +
+  labs(
+    title = "Predicted vs. Actual Valley Fever Cases (5-Variable Model)",
+    x = "Predicted Cases",
+    y = "Observed Cases (2001–2023)"
+  ) +
+  theme_minimal()
+
+#########################################
+# --- Residual diagnostic plots ---
+#########################################
+par(mfrow = c(2, 2))
+plot(model_final)
+par(mfrow = c(1, 1))  # Reset
+
+  #########################################
+# --- AIC comparison ---
+#########################################
+model_aic <- AIC(model_final)
+cat("AIC for 5-variable linear model:", model_aic, "\n")
+
+
+
+
+
+
+
+
+
+#########################################
+# Load libraries
+#########################################
+library(tidyverse)
+library(janitor)
+library(mgcv)
+
+#########################################
+# --- Read and clean SVI data ---
+#########################################
+svi_all <- read_csv("data_raw/california_svi_2020.csv") %>%
+  clean_names()
+
+svi_summary <- svi_all %>%
+  group_by(county = str_to_upper(county)) %>%
+  summarise(
+    ep_pov150 = mean(ep_pov150, na.rm = TRUE),
+    ep_disabl = mean(ep_disabl, na.rm = TRUE),
+    ep_crowd = mean(ep_crowd, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#########################################
+# --- Read and clean PM2.5 data ---
+#########################################
+pm_raw <- read_csv("HDPulse_data_export.csv", col_names = "X1")
+pm_trim <- pm_raw[-c(1:6), , drop = FALSE]
+
+pm_clean <- pm_trim %>%
+  separate(X1, into = c("county", "fips", "pm25"), sep = ",") %>%
+  mutate(
+    county = str_remove(county, " County"),
+    county = str_to_upper(county),
+    county = str_trim(county),
+    pm25 = as.numeric(pm25)
+  ) %>%
+  filter(!is.na(pm25)) %>%
+  dplyr::select(county, pm25)
+
+#########################################
+# --- Merge SVI and PM2.5 data ---
+#########################################
+svi_pm <- left_join(svi_summary, pm_clean, by = "county") %>%
+  drop_na()
+
+#########################################
+# --- Read and clean Valley Fever data ---
+#########################################
+vf_cases <- read_csv("valley_fever_cases_by_lhd_2001-2023.csv", skip = 3,
+                     col_names = c("county", "year", "cases_raw", "inc_rate_raw"))
+
+vf_clean <- vf_cases %>%
+  mutate(
+    county = str_to_upper(county),
+    county = str_remove(county, " COUNTY"),
+    county = str_trim(county),
+    cases = as.numeric(cases_raw),
+    county = case_when(
+      county == "BERKELEY" ~ "ALAMEDA",
+      county == "LONG BEACH" ~ "LOS ANGELES",
+      county == "PASADENA" ~ "LOS ANGELES",
+      TRUE ~ county
+    )
+  ) %>%
+  filter(!is.na(cases) & !str_detect(county, "TOTAL|\\*")) %>%
+  group_by(county) %>%
+  summarise(total_cases = sum(cases, na.rm = TRUE), .groups = "drop") %>%
+  filter(total_cases > 44)
+
+#########################################
+# --- Merge VF data with SVI + PM ---
+#########################################
+vf_final <- left_join(vf_clean, svi_pm, by = "county") %>%
+  drop_na()
+
+#########################################
+# --- Merge with average temperature ---
+#########################################
+vf_final <- left_join(
+  vf_final,
+  merged_vf_temp %>% as_tibble() %>% dplyr::select(county, avg_value),
+  by = "county"
+) %>%
+  rename(avg_temp = avg_value) %>%
+  drop_na()
+
+#########################################
+# --- GAM model with 5 variables ---
+#########################################
+model_gam_final <- gam(total_cases ~ 
+                         s(ep_pov150) + 
+                         s(ep_disabl) + 
+                         s(ep_crowd) + 
+                         s(pm25) + 
+                         s(avg_temp),
+                       family = nb(), data = vf_final)
+
+# Summary
+summary(model_gam_final)
+
+#########################################
+# --- Residual plot ---
+#########################################
+res_nb <- residuals(model_gam_final, type = "pearson")
+plot(fitted(model_gam_final), res_nb,
+     xlab = "Fitted values",
+     ylab = "Pearson residuals",
+     main = "Residual plot (GAM SVI + PM2.5 + Temp)")
+abline(h = 0, col = "red")
+
+#########################################
+# --- Predicted vs actual plot ---
+#########################################
+vf_final <- vf_final %>%
+  mutate(predicted_cases_gam = predict(model_gam_final, type = "response"))
+
+cor_test <- cor.test(vf_final$predicted_cases_gam, vf_final$total_cases)
+r_value <- round(cor_test$estimate, 3)
+p_value <- signif(cor_test$p.value, 3)
+annotation_text <- sprintf("r = %.3f\np = %.3f", r_value, p_value)
+
+ggplot(vf_final, aes(x = predicted_cases_gam, y = total_cases)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_abline(slope = 1, intercept = 0, color = "blue", linetype = "dashed") +
+  annotate("text",
+           x = min(vf_final$predicted_cases_gam, na.rm = TRUE),
+           y = max(vf_final$total_cases, na.rm = TRUE) * 0.9,
+           label = annotation_text, hjust = 0, size = 4, color = "black") +
+  labs(
+    title = "Predicted vs. Actual Total Cases (GAM SVI + PM2.5 + Temp)",
+    x = "Predicted Total Cases",
+    y = "Observed Total Cases (2001–2023)"
+  ) +
+  theme_minimal()
+
+#########################################
+# --- Smooth function plots ---
+#########################################
+plot(model_gam_final, pages = 1, shade = TRUE)
+
+#########################################
+# --- Compute and print AIC ---
+#########################################
+model_aic <- AIC(model_gam_final)
+cat("AIC for GAM with SVI + PM2.5 + Temp variables:", model_aic, "\n")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Folder path where your files are stored
+folder_path <- "Water"
+
+# Read each CSV individually and assign to separate objects
+data_p2001 <- read_csv(file.path(folder_path, "p2001.csv"), skip = 4)
+data_p2002 <- read_csv(file.path(folder_path, "p2002.csv"), skip = 4)
+data_p2003 <- read_csv(file.path(folder_path, "p2003.csv"), skip = 4)
+data_p2004 <- read_csv(file.path(folder_path, "p2004.csv"), skip = 4)
+data_p2005 <- read_csv(file.path(folder_path, "p2005.csv"), skip = 4)
+data_p2006 <- read_csv(file.path(folder_path, "p2006.csv"), skip = 4)
+data_p2007 <- read_csv(file.path(folder_path, "p2007.csv"), skip = 4)
+data_p2008 <- read_csv(file.path(folder_path, "p2008.csv"), skip = 4)
+data_p2009 <- read_csv(file.path(folder_path, "p2009.csv"), skip = 4)
+data_p2010 <- read_csv(file.path(folder_path, "p2010.csv"), skip = 4)
+data_p2011 <- read_csv(file.path(folder_path, "p2011.csv"), skip = 4)
+data_p2012 <- read_csv(file.path(folder_path, "p2012.csv"), skip = 4)
+data_p2013 <- read_csv(file.path(folder_path, "p2013.csv"), skip = 4)
+data_p2014 <- read_csv(file.path(folder_path, "p2014.csv"), skip = 4)
+data_p2015 <- read_csv(file.path(folder_path, "p2015.csv"), skip = 4)
+data_p2016 <- read_csv(file.path(folder_path, "p2016.csv"), skip = 4)
+data_p2017 <- read_csv(file.path(folder_path, "p2017.csv"), skip = 4)
+data_p2018 <- read_csv(file.path(folder_path, "p2018.csv"), skip = 4)
+data_p2019 <- read_csv(file.path(folder_path, "p2019.csv"), skip = 4)
+data_p2020 <- read_csv(file.path(folder_path, "p2020.csv"), skip = 4)
+data_p2021 <- read_csv(file.path(folder_path, "p2021.csv"), skip = 4)
+data_p2022 <- read_csv(file.path(folder_path, "p2022.csv"), skip = 4)
+data_p2023 <- read_csv(file.path(folder_path, "p2023.csv"), skip = 4)
+
+library(tidyverse)
+
+years_p <- 2001:2023
+
+all_data_p <- list()
+
+for (yr in years_p) {
+  file_path_p <- paste0("Water/p", yr, ".csv")
+  precip_raw_p <- read_csv(file_path_p, skip = 4)
+  
+  precip_clean_p <- precip_raw_p %>%
+    dplyr::select(Name, Value) %>%
+    mutate(year = yr)
+  
+  all_data_p[[as.character(yr)]] <- precip_clean_p
+}
+
+# Combine into one data frame
+combined_data_p <- bind_rows(all_data_p)
+
+# Convert Value to numeric if needed
+combined_data_p <- combined_data_p %>%
+  mutate(Value = as.numeric(Value))
+
+# Calculate average precipitation per county
+county_avg_p <- combined_data_p %>%
+  group_by(Name) %>%
+  summarise(
+    total_value_p = sum(Value, na.rm = TRUE),
+    avg_value_p = total_value_p / 22
+  ) %>%
+  arrange(desc(avg_value_p))
+
+print(county_avg_p)
+
+vf_cases_p <- read_csv("valley_fever_cases_by_lhd_2001-2023.csv", skip = 3,
+                       col_names = c("county", "year", "cases_raw", "inc_rate_raw"))
+
+vf_clean_p <- vf_cases_p %>%
+  mutate(
+    county = str_to_upper(county),
+    county = str_remove(county, " COUNTY"),
+    county = str_trim(county),
+    cases = as.numeric(cases_raw),
+    county = case_when(
+      county == "BERKELEY" ~ "ALAMEDA",
+      county == "LONG BEACH" ~ "LOS ANGELES",
+      county == "PASADENA" ~ "LOS ANGELES",
+      TRUE ~ county
+    )
+  ) %>%
+  filter(!is.na(cases) & !str_detect(county, "TOTAL|\\*")) %>%
+  group_by(county) %>%
+  summarise(total_cases = sum(cases, na.rm = TRUE), .groups = "drop") %>%
+  filter(total_cases > 44)
+
+# Clean county names in precipitation data
+county_avg_p <- county_avg_p %>%
+  mutate(Name = str_to_upper(Name),
+         Name = str_remove(Name, " COUNTY"),
+         Name = str_trim(Name))
+
+# Merge only counties with >44 VF cases
+merged_vf_precip_p <- vf_clean_p %>%
+  left_join(county_avg_p, by = c("county" = "Name"))
+
+# Drop counties with no precipitation data
+merged_vf_precip_p <- merged_vf_precip_p %>%
+  drop_na(avg_value_p)
+
+print(merged_vf_precip_p)
+
+# Calculate Pearson correlation
+cor_test_p <- cor.test(merged_vf_precip_p$total_cases, merged_vf_precip_p$avg_value_p)
+
+cat("Pearson correlation coefficient (r):", round(cor_test_p$estimate, 3), "\n")
+cat("p-value:", signif(cor_test_p$p.value, 3), "\n")
+
+r_value_p <- round(cor_test_p$estimate, 3)
+p_value_p <- signif(cor_test_p$p.value, 3)
+annotation_text_p <- sprintf("r = %.3f\np = %.3f", r_value_p, p_value_p)
+
+ggplot(merged_vf_precip_p, aes(x = avg_value_p, y = total_cases)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+  annotate("text",
+           x = min(merged_vf_precip_p$avg_value_p, na.rm = TRUE) + 0.2,
+           y = max(merged_vf_precip_p$total_cases, na.rm = TRUE) * 0.9,
+           label = annotation_text_p, hjust = 0, size = 4, color = "black") +
+  labs(
+    title = "Total Valley Fever Cases vs. Average Precipitation (2001–2023)",
+    x = "Average Precipitation (inches or mm)",
+    y = "Total VF Cases (2001–2023)"
+  ) +
+  theme_minimal()
+
+
+
+
+
+
+
+#########################################
+# --- Read and clean Valley Fever data ---
+#########################################
+vf_cases <- readr::read_csv("valley_fever_cases_by_lhd_2001-2023.csv", skip = 3,
+                            col_names = c("county", "year", "cases_raw", "inc_rate_raw"))
+
+vf_clean <- vf_cases %>%
+  mutate(
+    county = str_to_upper(county),
+    county = str_remove(county, " COUNTY"),
+    county = str_trim(county),
+    cases = as.numeric(cases_raw),
+    county = case_when(
+      county == "BERKELEY" ~ "ALAMEDA",
+      county == "LONG BEACH" ~ "LOS ANGELES",
+      county == "PASADENA" ~ "LOS ANGELES",
+      TRUE ~ county
+    )
+  ) %>%
+  filter(!is.na(cases) & !str_detect(county, "TOTAL|\\*")) %>%
+  group_by(county) %>%
+  summarise(total_cases = sum(cases, na.rm = TRUE), .groups = "drop") %>%
+  filter(total_cases > 44)  # Only keep counties with >44 cases
+
+#########################################
+# --- Merge SVI + PM data ---
+#########################################
+vf_final <- left_join(vf_clean, svi_pm, by = "county") %>%
+  drop_na()
+
+#########################################
+# --- Merge with temperature data ---
+#########################################
+vf_final <- left_join(
+  vf_final,
+  merged_vf_temp %>% as_tibble() %>% dplyr::select(county, avg_value),
+  by = "county"
+) %>%
+  rename(avg_temp = avg_value) %>%
+  drop_na()
+
+#########################################
+# --- Merge with precipitation data ---
+#########################################
+vf_final <- left_join(
+  vf_final,
+  merged_vf_precip_p %>% as_tibble() %>% dplyr::select(county, avg_value_p),
+  by = "county"
+) %>%
+  rename(avg_precip = avg_value_p) %>%
+  drop_na()
+
+#########################################
+# --- Build regression model using 6 vars ---
+#########################################
+final_formula <- "total_cases ~ ep_pov150 + ep_disabl + ep_crowd + pm25 + avg_temp + avg_precip"
+model_final <- lm(as.formula(final_formula), data = vf_final)
+
+# Print summary
+summary(model_final)
+
+#########################################
+# --- Check VIFs for multicollinearity ---
+#########################################
+vif_values <- car::vif(model_final)
+cat("VIF for each variable:\n")
+print(vif_values)
+
+#########################################
+# --- Add predicted values ---
+#########################################
+vf_final <- vf_final %>%
+  mutate(predicted_cases = predict(model_final, newdata = vf_final))
+
+#########################################
+# --- Correlation test ---
+#########################################
+cor_test <- cor.test(vf_final$predicted_cases, vf_final$total_cases)
+r_value <- round(cor_test$estimate, 3)
+p_value <- signif(cor_test$p.value, 3)
+
+cat("Correlation between predicted and actual cases (r):", r_value, "\n")
+cat("p-value:", p_value, "\n")
+
+annotation_text <- sprintf("r = %.3f\np = %.3f", r_value, p_value)
+
+#########################################
+# --- Plot predicted vs actual cases ---
+#########################################
+ggplot(vf_final, aes(x = predicted_cases, y = total_cases)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+  annotate("text",
+           x = min(vf_final$predicted_cases, na.rm = TRUE) + 0.02,
+           y = max(vf_final$total_cases, na.rm = TRUE) * 0.9,
+           label = annotation_text, hjust = 0, size = 4, color = "black") +
+  labs(
+    title = "Predicted vs. Actual Valley Fever Cases (6-Variable Model)",
+    x = "Predicted Cases",
+    y = "Observed Cases (2001–2023)"
+  ) +
+  theme_minimal()
+
+#########################################
+# --- Residual diagnostic plots ---
+#########################################
+par(mfrow = c(2, 2))
+plot(model_final)
+par(mfrow = c(1, 1))  # Reset
+
+#########################################
+# --- AIC comparison ---
+#########################################
+model_aic <- AIC(model_final)
+cat("AIC for 6-variable linear model:", model_aic, "\n")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#########################################
+# Load libraries
+#########################################
+library(tidyverse)
+library(janitor)
+library(mgcv)
+
+#########################################
+# --- Read and clean SVI data ---
+#########################################
+svi_all <- read_csv("data_raw/california_svi_2020.csv") %>%
+  clean_names()
+
+svi_summary <- svi_all %>%
+  group_by(county = str_to_upper(county)) %>%
+  summarise(
+    ep_pov150 = mean(ep_pov150, na.rm = TRUE),
+    ep_disabl = mean(ep_disabl, na.rm = TRUE),
+    ep_crowd = mean(ep_crowd, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#########################################
+# --- Read and clean PM2.5 data ---
+#########################################
+pm_raw <- read_csv("HDPulse_data_export.csv", col_names = "X1")
+pm_trim <- pm_raw[-c(1:6), , drop = FALSE]
+
+pm_clean <- pm_trim %>%
+  separate(X1, into = c("county", "fips", "pm25"), sep = ",") %>%
+  mutate(
+    county = str_remove(county, " County"),
+    county = str_to_upper(county),
+    county = str_trim(county),
+    pm25 = as.numeric(pm25)
+  ) %>%
+  filter(!is.na(pm25)) %>%
+  dplyr::select(county, pm25)
+
+#########################################
+# --- Merge SVI and PM2.5 data ---
+#########################################
+svi_pm <- left_join(svi_summary, pm_clean, by = "county") %>%
+  drop_na()
+
+#########################################
+# --- Read and clean Valley Fever data ---
+#########################################
+vf_cases <- read_csv("valley_fever_cases_by_lhd_2001-2023.csv", skip = 3,
+                     col_names = c("county", "year", "cases_raw", "inc_rate_raw"))
+
+vf_clean <- vf_cases %>%
+  mutate(
+    county = str_to_upper(county),
+    county = str_remove(county, " COUNTY"),
+    county = str_trim(county),
+    cases = as.numeric(cases_raw),
+    county = case_when(
+      county == "BERKELEY" ~ "ALAMEDA",
+      county == "LONG BEACH" ~ "LOS ANGELES",
+      county == "PASADENA" ~ "LOS ANGELES",
+      TRUE ~ county
+    )
+  ) %>%
+  filter(!is.na(cases) & !str_detect(county, "TOTAL|\\*")) %>%
+  group_by(county) %>%
+  summarise(total_cases = sum(cases, na.rm = TRUE), .groups = "drop") %>%
+  filter(total_cases > 44)
+
+#########################################
+# --- Merge VF data with SVI + PM ---
+#########################################
+vf_final <- left_join(vf_clean, svi_pm, by = "county") %>%
+  drop_na()
+
+#########################################
+# --- Merge with average temperature ---
+#########################################
+vf_final <- left_join(
+  vf_final,
+  merged_vf_temp %>% as_tibble() %>% dplyr::select(county, avg_value),
+  by = "county"
+) %>%
+  rename(avg_temp = avg_value) %>%
+  drop_na()
+
+#########################################
+# --- Merge with average precipitation ---
+#########################################
+vf_final <- left_join(
+  vf_final,
+  merged_vf_precip_p %>% as_tibble() %>% dplyr::select(county, avg_value_p),
+  by = "county"
+) %>%
+  rename(avg_precip = avg_value_p) %>%
+  drop_na()
+
+#########################################
+# --- GAM model with 6 variables ---
+#########################################
+model_gam_6 <- gam(total_cases ~ 
+                     s(ep_pov150) + 
+                     s(ep_disabl) + 
+                     s(ep_crowd) + 
+                     s(pm25) + 
+                     s(avg_temp) + 
+                     s(avg_precip),
+                   family = nb(), data = vf_final)
+
+# Summary
+summary(model_gam_6)
+
+#########################################
+# --- Residual plot ---
+#########################################
+res_nb <- residuals(model_gam_6, type = "pearson")
+plot(fitted(model_gam_6), res_nb,
+     xlab = "Fitted values",
+     ylab = "Pearson residuals",
+     main = "Residual plot (GAM SVI + PM2.5 + Temp + Precip)")
+
+abline(h = 0, col = "red")
+
+#########################################
+# --- Predicted vs actual plot ---
+#########################################
+vf_final <- vf_final %>%
+  mutate(predicted_cases_gam_6 = predict(model_gam_6, type = "response"))
+
+cor_test <- cor.test(vf_final$predicted_cases_gam_6, vf_final$total_cases)
+r_value <- round(cor_test$estimate, 3)
+p_value <- signif(cor_test$p.value, 3)
+annotation_text <- sprintf("r = %.3f\np = %.3f", r_value, p_value)
+
+ggplot(vf_final, aes(x = predicted_cases_gam_6, y = total_cases)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_abline(slope = 1, intercept = 0, color = "blue", linetype = "dashed") +
+  annotate("text",
+           x = min(vf_final$predicted_cases_gam_6, na.rm = TRUE),
+           y = max(vf_final$total_cases, na.rm = TRUE) * 0.9,
+           label = annotation_text, hjust = 0, size = 4, color = "black") +
+  labs(
+    title = "Predicted vs. Actual Total Cases (GAM SVI + PM2.5 + Temp + Precip)",
+    x = "Predicted Total Cases",
+    y = "Observed Total Cases (2001–2023)"
+  ) +
+  theme_minimal()
+
+#########################################
+# --- Smooth function plots ---
+#########################################
+plot(model_gam_6, pages = 1, shade = TRUE)
+
+#########################################
+# --- Compute and print AIC ---
+#########################################
+model_aic <- AIC(model_gam_6)
+cat("AIC for GAM with SVI + PM2.5 + Temp + Precip:", model_aic, "\n")
+
+
+
+
+
+
+
+model_gam_ti <- gam(
+  total_cases ~ 
+    s(ep_pov150) + 
+    s(ep_disabl) + 
+    s(ep_crowd) + 
+    s(pm25) + 
+    s(avg_temp) + 
+    s(avg_precip) + 
+    ti(avg_temp, avg_precip),  # interaction term
+  family = nb(),
+  data = vf_final
+)
+summary(model_gam_ti)
+AIC(model_gam_ti)
+
+res_ti <- residuals(model_gam_ti, type = "pearson")
+plot(fitted(model_gam_ti), res_ti,
+     xlab = "Fitted values",
+     ylab = "Pearson residuals",
+     main = "Residual Plot: GAM with ti(temp, precip)")
+abline(h = 0, col = "red")
+
+
+vf_final <- vf_final %>%
+  mutate(predicted_cases_gam_ti = predict(model_gam_ti, type = "response"))
+
+cor_test_ti <- cor.test(vf_final$predicted_cases_gam_ti, vf_final$total_cases)
+r_value_ti <- round(cor_test_ti$estimate, 3)
+p_value_ti <- signif(cor_test_ti$p.value, 3)
+
+ggplot(vf_final, aes(x = predicted_cases_gam_ti, y = total_cases)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_abline(slope = 1, intercept = 0, color = "blue", linetype = "dashed") +
+  annotate("text",
+           x = min(vf_final$predicted_cases_gam_ti, na.rm = TRUE),
+           y = max(vf_final$total_cases, na.rm = TRUE) * 0.9,
+           label = sprintf("r = %.3f\np = %.3f", r_value_ti, p_value_ti),
+           hjust = 0, size = 4) +
+  labs(
+    title = "Predicted vs. Actual Total Cases (GAM + ti(temp, precip))",
+    x = "Predicted Total Cases",
+    y = "Observed Total Cases"
+  ) +
+  theme_minimal()
+
+plot(model_gam_ti, pages = 1, shade = TRUE)
+
+
+
+model_gam_env_only <- gam(total_cases ~ 
+                            s(pm25) + 
+                            s(avg_temp) + 
+                            s(avg_precip) + 
+                            ti(avg_temp, avg_precip),
+                          family = nb(), data = vf_final)
+
+summary(model_gam_env_only)
+AIC(model_gam_env_only)
+
+
+
+
