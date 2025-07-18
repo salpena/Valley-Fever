@@ -1,0 +1,63 @@
+# Title: January - December 2004 California County Average Temperature
+# Units: Degrees Fahrenheit
+# Missing: -99
+# Note: Period of Record: 130 Years
+ID,Name,State,Value,Rank,Anomaly (1901-2000 base period),1901-2000 Mean
+CA-001,Alameda County,California,59.6,112,1.7,57.9
+CA-003,Alpine County,California,44.3,98,1,43.3
+CA-005,Amador County,California,58.2,101,1,57.2
+CA-007,Butte County,California,60.2,109,1.4,58.8
+CA-009,Calaveras County,California,58.5,100,0.9,57.6
+CA-011,Colusa County,California,61.7,109,1.4,60.4
+CA-013,Contra Costa County,California,60.4,109,1.6,58.8
+CA-015,Del Norte County,California,53.5,128,2.6,50.8
+CA-017,El Dorado County,California,54.3,100,0.9,53.4
+CA-019,Fresno County,California,55.8,103,1.4,54.4
+CA-021,Glenn County,California,60.6,110,1.3,59.3
+CA-023,Humboldt County,California,55.3,125,2.4,53
+CA-025,Imperial County,California,73.6,100,1.4,72.2
+CA-027,Inyo County,California,60.9,98,1.4,59.6
+CA-029,Kern County,California,62,102,1.5,60.5
+CA-031,Kings County,California,63.9,101,1.4,62.5
+CA-033,Lake County,California,57.6,109,1.3,56.3
+CA-035,Lassen County,California,47.7,110,1.5,46.1
+CA-037,Los Angeles County,California,61.7,106,1.8,59.9
+CA-039,Madera County,California,56.5,104,1.3,55.1
+CA-041,Marin County,California,56.7,119,1.8,54.8
+CA-043,Mariposa County,California,55.7,100,1.1,54.5
+CA-045,Mendocino County,California,56,112,1.1,54.8
+CA-047,Merced County,California,62.4,105,1.4,61
+CA-049,Modoc County,California,47.5,112,1.9,45.6
+CA-051,Mono County,California,44.4,101,1.1,43.3
+CA-053,Monterey County,California,58.8,111,1.6,57.2
+CA-055,Napa County,California,60.1,118,1.9,58.2
+CA-057,Nevada County,California,52.7,103,1,51.7
+CA-059,Orange County,California,64,105,1.7,62.4
+CA-061,Placer County,California,54.1,104,1,53
+CA-063,Plumas County,California,48.1,105,1.3,46.8
+CA-065,Riverside County,California,68.2,103,1.4,66.8
+CA-067,Sacramento County,California,62.4,107,1.3,61.1
+CA-069,San Benito County,California,59.2,114,1.8,57.4
+CA-071,San Bernardino County,California,66.4,101,1.3,65.1
+CA-073,San Diego County,California,62.6,101,1.4,61.2
+CA-075,San Francisco County,California,57.7,117,2,55.8
+CA-077,San Joaquin County,California,62.2,112,1.4,60.7
+CA-079,San Luis Obispo County,California,59.3,100,1.3,58
+CA-081,San Mateo County,California,57.4,117,2,55.4
+CA-083,Santa Barbara County,California,58.3,103,1.7,56.6
+CA-085,Santa Clara County,California,58.7,114,1.8,56.9
+CA-087,Santa Cruz County,California,57.5,112,1.8,55.7
+CA-089,Shasta County,California,55.9,113,1.6,54.3
+CA-091,Sierra County,California,47.6,102,1.2,46.4
+CA-093,Siskiyou County,California,49.8,116,1.9,47.8
+CA-095,Solano County,California,61.5,114,1.8,59.7
+CA-097,Sonoma County,California,57.8,116,1.7,56.1
+CA-099,Stanislaus County,California,61.6,104,1.2,60.4
+CA-101,Sutter County,California,63.3,110,1.5,61.8
+CA-103,Tehama County,California,59.1,109,1.2,57.9
+CA-105,Trinity County,California,53.3,117,1.7,51.6
+CA-107,Tulare County,California,54.7,103,1.5,53.2
+CA-109,Tuolumne County,California,50.5,97,0.9,49.6
+CA-111,Ventura County,California,58,108,1.9,56
+CA-113,Yolo County,California,62.5,114,1.6,60.9
+CA-115,Yuba County,California,61.1,107,1.3,59.8
