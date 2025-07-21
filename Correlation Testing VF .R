@@ -922,7 +922,7 @@ svi_summary <- svi_all %>%
   group_by(county = str_to_upper(county)) %>%
   summarise(
     rpl_themes = mean(rpl_themes, na.rm = TRUE),
-    e_totpop = mean(e_totpop, na.rm = TRUE),  # ✅ Add total population column
+    e_totpop = mean(e_totpop, na.rm = TRUE),  #  Add total population column
     .groups = "drop"
   )
 
